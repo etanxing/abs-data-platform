@@ -1,0 +1,17 @@
+name = "abs-api"
+main = "src/index.ts"
+compatibility_date = "2024-12-18"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "abs-data"
+database_id = "placeholder-replace-with-real-id"
+
+[[r2_buckets]]
+binding = "REPORTS"
+bucket_name = "abs-reports"
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "placeholder-replace-with-real-id"

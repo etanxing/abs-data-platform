@@ -1,0 +1,12 @@
+{
+  "name": "@abs/config",
+  "version": "0.0.1",
+  "private": true,
+  "devDependencies": {
+    "tailwindcss": "^3.4.17"
+  },
+  "exports": {
+    "./tsconfig.base.json": "./tsconfig.base.json",
+    "./tailwind": "./tailwind.config.ts"
+  }
+}
