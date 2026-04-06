@@ -16,6 +16,12 @@
     "node": ">=20"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild", "sharp", "workerd"]
+    "onlyBuiltDependencies": ["esbuild", "sharp", "workerd", "@react-pdf/pdfkit"],
+    "peerDependencyRules": {
+      "allowedVersions": {
+        "recharts>react": "19",
+        "recharts>react-dom": "19"
+      }
+    }
   }
 }
