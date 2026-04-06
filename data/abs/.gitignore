@@ -1,0 +1,5 @@
+raw/
+processed/
+__pycache__/
+*.pyc
+.venv/
