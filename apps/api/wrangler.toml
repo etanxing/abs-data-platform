@@ -18,7 +18,13 @@ id = "placeholder-replace-with-real-id"
 
 [vars]
 DEMOREPORT_URL = "http://localhost:3001"
-# Override these in your Cloudflare dashboard (Settings → Variables)
-# or via `wrangler secret put STRIPE_SECRET_KEY`
+GRANTDATA_URL = "http://localhost:3002"
+# Override secrets in Cloudflare dashboard (Settings → Variables)
+# or via `wrangler secret put <NAME>`
 STRIPE_SECRET_KEY = "sk_test_placeholder"
 STRIPE_WEBHOOK_SECRET = "whsec_placeholder"
+JWT_SECRET = "changeme-replace-with-random-secret-in-production"
+# Stripe Price IDs for GrantData subscription plans
+STRIPE_PRICE_STARTER = "price_placeholder_starter"
+STRIPE_PRICE_PROFESSIONAL = "price_placeholder_professional"
+STRIPE_PRICE_TEAM = "price_placeholder_team"
