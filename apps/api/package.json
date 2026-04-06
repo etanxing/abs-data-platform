@@ -11,7 +11,9 @@
   },
   "dependencies": {
     "@abs/data": "workspace:*",
-    "hono": "^4.7.4"
+    "@abs/pdf-generator": "workspace:*",
+    "hono": "^4.7.4",
+    "stripe": "^17.7.0"
   },
   "devDependencies": {
     "@abs/config": "workspace:*",

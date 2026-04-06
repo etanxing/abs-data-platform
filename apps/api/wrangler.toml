@@ -15,3 +15,10 @@ bucket_name = "abs-reports"
 [[kv_namespaces]]
 binding = "CACHE"
 id = "placeholder-replace-with-real-id"
+
+[vars]
+DEMOREPORT_URL = "http://localhost:3001"
+# Override these in your Cloudflare dashboard (Settings → Variables)
+# or via `wrangler secret put STRIPE_SECRET_KEY`
+STRIPE_SECRET_KEY = "sk_test_placeholder"
+STRIPE_WEBHOOK_SECRET = "whsec_placeholder"
