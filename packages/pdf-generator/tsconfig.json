@@ -1,7 +1,7 @@
 {
   "extends": "@abs/config/tsconfig.base.json",
   "compilerOptions": {
-    "lib": ["ES2022"],
+    "lib": ["ES2022", "DOM"],
     "jsx": "react",
     "outDir": "./dist",
     "rootDir": "./src",

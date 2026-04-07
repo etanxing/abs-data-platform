@@ -1,5 +1,5 @@
 import React from "react";
-import { renderToBuffer } from "@react-pdf/renderer";
+import { pdf } from "@react-pdf/renderer";
 import type { DocumentProps } from "@react-pdf/renderer";
 import { FeasibilityReport } from "./FeasibilityReport";
 import type { ReportData } from "./report-types";
@@ -17,21 +17,19 @@ export interface GeneratedReport {
  * @param data  Full report data (demographics, SEIFA, housing, language)
  * @returns     PDF as Uint8Array and a suggested filename
  *
- * Note: Uses @react-pdf/renderer. In Cloudflare Workers, ensure
- * `nodejs_compat` is enabled in wrangler.toml.
+ * Uses pdf() from @react-pdf/renderer — compatible with Cloudflare Workers
+ * when wrangler resolves the browser build (conditions = ["browser"]).
  */
 export async function generateFeasibilityReport(
   data: ReportData,
 ): Promise<GeneratedReport> {
   // Cast required: TypeScript can't infer that FeasibilityReport renders a Document
   const element = React.createElement(FeasibilityReport, { data }) as React.ReactElement<DocumentProps>;
-  const nodeBuffer = await renderToBuffer(element);
 
-  // renderToBuffer returns a Node.js Buffer; coerce to Uint8Array for portability
-  const buffer =
-    nodeBuffer instanceof Uint8Array
-      ? nodeBuffer
-      : new Uint8Array(nodeBuffer.buffer, nodeBuffer.byteOffset, nodeBuffer.byteLength);
+  // pdf().toBlob() uses the browser-compatible code path (no Node.js APIs)
+  const blob = await pdf(element).toBlob();
+  const arrayBuffer = await blob.arrayBuffer();
+  const buffer = new Uint8Array(arrayBuffer);
 
   const slug = data.suburb
     .toLowerCase()
