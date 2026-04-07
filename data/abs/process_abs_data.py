@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 Transform raw ABS downloads into clean CSVs ready for D1 import.
 
@@ -46,36 +47,64 @@ DISCOVER = "--discover" in sys.argv
 # Helpers
 # ──────────────────────────────────────────────────────────────
 
-def find_census_file(state: str, table: str) -> Path | None:
-    """Locate a Census DataPack CSV for the given state and table code.
+def find_census_files(state: str, table: str) -> list[Path]:
+    """Locate Census DataPack CSV(s) for the given state and table code.
 
-    The zip extracts to a nested structure; we search recursively.
-    e.g. table='G01' -> finds 2021Census_G01_NSW_SA2.csv
+    Handles both single-file tables (G01 → G01_NSW_SA2.csv) and
+    split-file tables (G04 → G04A_NSW_SA2.csv + G04B_NSW_SA2.csv).
+    Returns a list of matching paths sorted alphabetically.
     """
     base = RAW_DIR / f"census_{state}"
-    pattern = f"*{table}_{state}_SA2.csv"
-    hits = list(base.rglob(pattern))
-    if not hits:
-        print(f"  ⚠ Not found: {pattern} under {base}")
-        return None
-    if len(hits) > 1:
-        print(f"  ⚠ Multiple matches for {pattern} — using first: {hits[0].name}")
-    return hits[0]
+    # Try exact match first
+    hits = list(base.rglob(f"*{table}_{state}_SA2.csv"))
+    if hits:
+        return sorted(hits)
+    # Try split-part match: G04A, G04B, G51A, G51B, G51C …
+    hits = list(base.rglob(f"*{table}[A-Z]_{state}_SA2.csv"))
+    if hits:
+        return sorted(hits)
+    print(f"  ⚠ Not found: {table} under {base}")
+    return []
+
+
+def find_census_file(state: str, table: str) -> Path | None:
+    hits = find_census_files(state, table)
+    return hits[0] if hits else None
 
 
 def load_census(state: str, table: str) -> pd.DataFrame | None:
-    path = find_census_file(state, table)
-    if path is None:
+    """Load and concatenate all parts of a Census DataPack table."""
+    paths = find_census_files(state, table)
+    if not paths:
         return None
-    df = pd.read_csv(path, dtype=str)
-    # Normalise the SA2 code column name (varies between short-header versions)
-    for candidate in ("SA2_CODE_2021", "SA2_MAINCODE_2021", "SA2_CODE"):
-        if candidate in df.columns:
-            df = df.rename(columns={candidate: "sa2_code"})
-            break
-    if "sa2_code" not in df.columns:
-        print(f"  ✗ Cannot find SA2 code column in {path.name}. Columns: {list(df.columns)[:8]}")
+
+    frames = []
+    for path in paths:
+        df = pd.read_csv(path, dtype=str)
+        # Normalise the SA2 code column name (varies between short-header versions)
+        for candidate in ("SA2_CODE_2021", "SA2_MAINCODE_2021", "SA2_CODE"):
+            if candidate in df.columns:
+                df = df.rename(columns={candidate: "sa2_code"})
+                break
+        if "sa2_code" not in df.columns:
+            print(f"  ✗ Cannot find SA2 code column in {path.name}. Columns: {list(df.columns)[:8]}")
+            continue
+        frames.append(df)
+
+    if not frames:
         return None
+
+    if len(frames) == 1:
+        df = frames[0]
+    else:
+        # Merge parts on sa2_code (outer join to keep all rows)
+        df = frames[0]
+        for part in frames[1:]:
+            # Drop duplicate SA2 code col from part before merging
+            df = df.merge(part, on="sa2_code", how="outer", suffixes=("", f"_dup"))
+            # Drop any duplicate columns introduced by the merge
+            df = df[[c for c in df.columns if not c.endswith("_dup")]]
+
     if DISCOVER:
         print(f"\n  [{state} {table}] columns ({len(df.columns)}):")
         for c in df.columns:
@@ -111,93 +140,67 @@ def safe_pct(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
 # ──────────────────────────────────────────────────────────────
 
 def process_seifa() -> pd.DataFrame:
-    """Read SEIFA 2021 SA2 Excel → DataFrame with standardised columns."""
+    """
+    Read SEIFA 2021 SA2 Excel → DataFrame with standardised columns.
+
+    The 2021 SEIFA SA2 Excel contains:
+      Table 1 — Summary (all 4 indices), header at row 5, data from row 6
+                 Cols: SA2 code, SA2 name, IRSD Score, IRSD Decile,
+                       IRSAD Score, IRSAD Decile, IER Score, IER Decile,
+                       IEO Score, IEO Decile
+      Table 2 — IRSD detail (with population), header at row 5
+                 Cols: SA2 code, SA2 name, Population, Score, (blank), Rank, Decile, Percentile
+    """
     print("\n[SEIFA] Processing SEIFA_2021_SA2.xlsx …")
     path = RAW_DIR / "SEIFA_2021_SA2.xlsx"
     if not path.exists():
         raise FileNotFoundError(f"Missing: {path}")
 
-    # The SEIFA Excel has a few header rows; find the row containing 'SA2 Code'
-    raw = pd.read_excel(path, sheet_name=None, header=None)
-    # Try each sheet until we find the SA2-level data
-    df_raw = None
-    for sheet_name, df_sheet in raw.items():
-        if df_sheet.astype(str).apply(lambda col: col.str.contains("SA2", na=False)).any().any():
-            df_raw = df_sheet
-            break
-    if df_raw is None:
-        df_raw = list(raw.values())[0]
-
-    # Find header row (contains "SA2" or "Score")
-    header_row = None
-    for i, row in df_raw.iterrows():
-        row_str = " ".join(str(v) for v in row.values).upper()
-        if "SCORE" in row_str and "DECILE" in row_str:
-            header_row = i
-            break
-    if header_row is None:
-        # Fallback: assume row 5 or 6
-        header_row = 5
-
-    df = pd.read_excel(
-        path,
-        sheet_name=list(raw.keys())[0] if df_raw is list(raw.values())[0] else None,
-        header=header_row,
-    )
-    # Drop completely empty rows/columns
-    df = df.dropna(how="all").dropna(axis=1, how="all").reset_index(drop=True)
-
+    # Table 1: summary — all four indices
+    t1 = pd.read_excel(path, sheet_name="Table 1", header=5, dtype=str)
+    t1 = t1.dropna(how="all").reset_index(drop=True)
     if DISCOVER:
-        print(f"  Columns: {list(df.columns)}")
+        print(f"  Table 1 columns: {list(t1.columns)}")
 
-    # Map columns by position or name patterns
-    # Typical order: SA2 Code, SA2 Name, Population, IRSD Score, IRSD Decile,
-    #                IRSAD Score, IRSAD Decile, IER Score, IER Decile, IEO Score, IEO Decile
-    cols = df.columns.tolist()
-
-    def find_col(*patterns: str) -> str | None:
-        for pat in patterns:
-            for c in cols:
-                if pat.lower() in str(c).lower():
-                    return c
-        return None
-
-    sa2_code_col  = find_col("sa2 code", "sa2_code", "code (2021)")
-    sa2_name_col  = find_col("sa2 name", "sa2_name", "name (2021)")
-    pop_col       = find_col("usual resident", "population")
-    irsd_score    = find_col("irsd score", "disadvantage score")
-    irsd_decile   = find_col("irsd decile", "disadvantage decile")
-    irsad_score   = find_col("irsad score", "advantage and disadvantage score")
-    irsad_decile  = find_col("irsad decile", "advantage and disadvantage decile")
-    ier_score     = find_col("ier score", "economic resources score")
-    ier_decile    = find_col("ier decile", "economic resources decile")
-    ieo_score     = find_col("ieo score", "education and occupation score")
-    ieo_decile    = find_col("ieo decile", "education and occupation decile")
-
-    missing = [name for name, c in [
-        ("SA2 code", sa2_code_col), ("IRSD score", irsd_score), ("IRSD decile", irsd_decile)
-    ] if c is None]
-    if missing:
-        raise ValueError(
-            f"Could not identify SEIFA columns: {missing}\n"
-            f"Available columns: {cols[:15]}\n"
-            "Check the Excel sheet and update the find_col() patterns."
-        )
+    # Positional column assignment (known from ABS 2021 SEIFA format)
+    cols_t1 = t1.columns.tolist()
+    sa2_code_col = cols_t1[0]
+    sa2_name_col = cols_t1[1]
+    # After SA2 code+name: IRSD Score, IRSD Decile, IRSAD Score, IRSAD Decile,
+    #                      IER Score, IER Decile, IEO Score, IEO Decile
+    data_cols = [c for c in cols_t1[2:] if "Unnamed" not in str(c) or not str(c).startswith("Unnamed")]
+    # Just use positional slicing: columns 2..9
+    data_cols = cols_t1[2:10]
 
     out = pd.DataFrame()
-    out["sa2_code"]                   = df[sa2_code_col].astype(str).str.strip().str.zfill(9)
-    out["sa2_name"]                   = df[sa2_name_col].astype(str).str.strip() if sa2_name_col else ""
-    out["usual_resident_population"]  = to_int(df[pop_col]) if pop_col else None
-    out["irsd_score"]                 = to_int(df[irsd_score])
-    out["irsd_decile"]                = to_int(df[irsd_decile])
-    out["irsad_score"]                = to_int(df[irsad_score]) if irsad_score else None
-    out["irsad_decile"]               = to_int(df[irsad_decile]) if irsad_decile else None
-    out["ier_score"]                  = to_int(df[ier_score]) if ier_score else None
-    out["ier_decile"]                 = to_int(df[ier_decile]) if ier_decile else None
-    out["ieo_score"]                  = to_int(df[ieo_score]) if ieo_score else None
-    out["ieo_decile"]                 = to_int(df[ieo_decile]) if ieo_decile else None
+    out["sa2_code"] = t1[sa2_code_col].astype(str).str.strip().str.split(".").str[0].str.zfill(9)
+    out["sa2_name"] = t1[sa2_name_col].astype(str).str.strip()
 
-    # Keep only NSW (1xxxxxxxx) and VIC (2xxxxxxxx) for MVP
+    def try_col(idx: int) -> pd.Series:
+        if idx < len(cols_t1):
+            return to_int(t1[cols_t1[idx]])
+        return pd.Series([None] * len(t1))
+
+    out["irsd_score"]   = try_col(2)
+    out["irsd_decile"]  = try_col(3)
+    out["irsad_score"]  = try_col(4)
+    out["irsad_decile"] = try_col(5)
+    out["ier_score"]    = try_col(6)
+    out["ier_decile"]   = try_col(7)
+    out["ieo_score"]    = try_col(8)
+    out["ieo_decile"]   = try_col(9)
+
+    # Table 2: IRSD with population
+    t2 = pd.read_excel(path, sheet_name="Table 2", header=5, dtype=str)
+    t2 = t2.dropna(how="all").reset_index(drop=True)
+    cols_t2 = t2.columns.tolist()
+    pop_df = pd.DataFrame()
+    pop_df["sa2_code"] = t2[cols_t2[0]].astype(str).str.strip().str.split(".").str[0].str.zfill(9)
+    pop_df["usual_resident_population"] = to_int(t2[cols_t2[2]])
+
+    out = out.merge(pop_df, on="sa2_code", how="left")
+
+    # Keep only NSW + VIC; drop non-numeric SA2 codes
     out = out[out["sa2_code"].str.match(r"^[12]\d{8}$")].reset_index(drop=True)
     print(f"  ✓ {len(out)} SA2 areas (NSW + VIC)")
     return out
@@ -208,37 +211,79 @@ def process_seifa() -> pd.DataFrame:
 # ──────────────────────────────────────────────────────────────
 
 def process_postcode_sa2() -> pd.DataFrame:
-    print("\n[Postcode→SA2] Processing correspondence CSV …")
-    path = RAW_DIR / "CG_POSTCODE_2021_SA2_2021.csv"
-    if not path.exists():
-        raise FileNotFoundError(f"Missing: {path}")
+    """
+    Derive postcode→SA2 correspondence by joining two ABS allocation files
+    on Mesh Block code:
+      SA2_2021_AUST.xlsx  — MB → SA2
+      POA_2021_AUST.xlsx  — MB → POA (postal area ≈ postcode)
 
-    df = pd.read_csv(path, dtype=str)
+    The old CG_POSTCODE_2021_SA2_2021.csv no longer exists in ASGS Edition 3.
+    """
+    print("\n[Postcode→SA2] Deriving from SA2 + POA allocation files …")
+
+    mb_path  = RAW_DIR / "MB_2021_AUST.xlsx"
+    poa_path = RAW_DIR / "POA_2021_AUST.xlsx"
+
+    if not mb_path.exists():
+        raise FileNotFoundError(f"Missing: {mb_path}")
+    if not poa_path.exists():
+        raise FileNotFoundError(f"Missing: {poa_path}")
+
+    # Load MB allocation: MB_CODE → SA2_CODE (among many other geographies)
+    print("  Loading MB allocation (35 MB, may take ~30s) …")
+    mb_df = pd.read_excel(mb_path, dtype=str)
     if DISCOVER:
-        print(f"  Columns: {list(df.columns)}")
+        print(f"  MB alloc columns: {list(mb_df.columns)}")
 
-    # Column name variations across ABS releases
-    pc_col   = col(df, "POSTCODE_2021", "POSTCODE", "postcode")
-    sa2_col  = col(df, "SA2_MAINCODE_2021", "SA2_CODE_2021", "SA2_CODE", "sa2_code")
-    rat_col  = col(df, "PERCENTAGE", "RATIO", "percentage", "ratio")
+    mb_col_mb   = col(mb_df, "MB_CODE_2021", "MB_CODE", "MESHBLOCK_CODE")
+    sa2_code_col = col(mb_df, "SA2_CODE_2021", "SA2_MAINCODE_2021", "SA2_CODE")
 
-    if not pc_col or not sa2_col:
+    if not mb_col_mb or not sa2_code_col:
         raise ValueError(
-            f"Cannot find postcode/SA2 columns.\nAvailable: {list(df.columns)}"
+            f"Cannot find MB/SA2 columns in MB allocation.\nAvailable: {list(mb_df.columns)}"
         )
 
-    out = pd.DataFrame()
-    out["postcode"] = df[pc_col].astype(str).str.strip().str.zfill(4)
-    out["sa2_code"] = df[sa2_col].astype(str).str.strip().str.zfill(9)
-    if rat_col:
-        # Convert percentage 0–100 → ratio 0–1
-        out["ratio"] = to_float(df[rat_col]) / 100.0
-        out["ratio"] = out["ratio"].clip(0, 1).fillna(1.0)
-    else:
-        out["ratio"] = 1.0
+    sa2_alloc = mb_df[[mb_col_mb, sa2_code_col]].copy()
+    sa2_alloc.columns = ["mb_code", "sa2_code"]
+    sa2_alloc["sa2_code"] = sa2_alloc["sa2_code"].astype(str).str.strip().str.zfill(9)
+    # Filter to NSW + VIC
+    sa2_alloc = sa2_alloc[sa2_alloc["sa2_code"].str.match(r"^[12]\d{8}$")]
+    print(f"  {len(sa2_alloc)} NSW+VIC mesh blocks with SA2")
 
-    # Filter to NSW (1) and VIC (2) SA2s
-    out = out[out["sa2_code"].str.match(r"^[12]\d{8}$")]
+    # Load POA allocation: MB_CODE → POA_CODE (= postcode)
+    print("  Loading POA allocation (18 MB, may take ~20s) …")
+    poa_df = pd.read_excel(poa_path, dtype=str)
+    if DISCOVER:
+        print(f"  POA alloc columns: {list(poa_df.columns)}")
+
+    mb_col_poa  = col(poa_df, "MB_CODE_2021", "MB_CODE", "MESHBLOCK_CODE")
+    poa_code_col = col(poa_df, "POA_CODE_2021", "POA_CODE", "POSTCODE")
+
+    if not mb_col_poa or not poa_code_col:
+        raise ValueError(
+            f"Cannot find MB/POA columns in POA allocation.\nAvailable: {list(poa_df.columns)}"
+        )
+
+    poa_alloc = poa_df[[mb_col_poa, poa_code_col]].copy()
+    poa_alloc.columns = ["mb_code", "postcode"]
+    poa_alloc = poa_alloc.dropna()
+    print(f"  {len(poa_alloc)} total mesh blocks with POA")
+
+    # Join MB → (SA2, POA), then aggregate: count MBs per (postcode, SA2) pair
+    merged = poa_alloc.merge(sa2_alloc, on="mb_code", how="inner")
+    grouped = (
+        merged.groupby(["postcode", "sa2_code"])
+        .size()
+        .reset_index(name="mb_count")
+    )
+
+    # Compute ratio: share of this postcode's MBs that fall in each SA2
+    total_per_postcode = grouped.groupby("postcode")["mb_count"].transform("sum")
+    grouped["ratio"] = (grouped["mb_count"] / total_per_postcode).round(4)
+
+    out = grouped[["postcode", "sa2_code", "ratio"]].copy()
+    # Normalise postcode: strip leading zeros since ABS postcodes are 4-char strings
+    out["postcode"] = out["postcode"].str.strip().str.zfill(4)
     out = out.dropna(subset=["postcode", "sa2_code"]).reset_index(drop=True)
     print(f"  ✓ {len(out)} postcode→SA2 mappings")
     return out
@@ -621,6 +666,13 @@ def main() -> None:
     demo["families_with_children_pct"] = None
     demo["single_parent_families_pct"] = None
     demo["census_year"] = 2021
+
+    # Ensure all expected columns exist (some may be None if a table was missing)
+    for missing_col in ["median_age", "median_household_income", "median_personal_income",
+                        "born_overseas_pct", "speaks_english_only_pct",
+                        "indigenous_population_pct"]:
+        if missing_col not in demo.columns:
+            demo[missing_col] = None
 
     demo_out = demo[[
         "sa2_code", "total_population", "median_age",

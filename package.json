@@ -10,7 +10,9 @@
     "deploy:api": "cd apps/api && wrangler deploy",
     "deploy:db:schema": "wrangler d1 execute abs-data-prod --file=data/abs/schema.sql --remote",
     "deploy:db:migrate": "wrangler d1 execute abs-data-prod --file=data/abs/migrations/001_add_reports.sql --remote && wrangler d1 execute abs-data-prod --file=data/abs/migrations/002_add_auth.sql --remote",
-    "deploy": "pnpm run deploy:api"
+    "deploy:demoreport": "NEXT_PUBLIC_API_URL=https://abs-api.eddie-p-halterman.workers.dev pnpm --filter @abs/demoreport build && wrangler pages deploy apps/demoreport/out --project-name demoreport --branch main",
+    "deploy:grantdata": "NEXT_PUBLIC_API_URL=https://abs-api.eddie-p-halterman.workers.dev pnpm --filter @abs/grantdata build && wrangler pages deploy apps/grantdata/out --project-name grantdata --branch main",
+    "deploy": "pnpm run deploy:api && pnpm run deploy:demoreport && pnpm run deploy:grantdata"
   },
   "devDependencies": {
     "turbo": "^2.3.3",

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 Import processed ABS CSVs into a Cloudflare D1 database.
 
@@ -37,7 +38,7 @@ REPO_ROOT     = SCRIPT_DIR.parent.parent
 # Config
 # ──────────────────────────────────────────────────────────────
 DB_NAME   = "abs-data"
-LOCAL     = "--local" in sys.argv
+LOCAL      = "--local" in sys.argv
 BATCH_SIZE = 200   # rows per INSERT statement
 
 for arg in sys.argv[1:]:
@@ -46,7 +47,8 @@ for arg in sys.argv[1:]:
     elif arg == "--db-name" and sys.argv.index(arg) + 1 < len(sys.argv):
         DB_NAME = sys.argv[sys.argv.index(arg) + 1]
 
-LOCAL_FLAG = ["--local"] if LOCAL else []
+# Wrangler 4.x defaults to local for d1 execute; always pass explicit flag
+LOCAL_FLAG = ["--local"] if LOCAL else ["--remote"]
 
 
 def run(cmd: list[str], cwd: Path = REPO_ROOT, check: bool = True) -> subprocess.CompletedProcess:
@@ -58,8 +60,12 @@ def run(cmd: list[str], cwd: Path = REPO_ROOT, check: bool = True) -> subprocess
 
 def wrangler(*args: str, capture: bool = False, check: bool = True) -> subprocess.CompletedProcess:
     cmd = ["pnpm", "exec", "wrangler"] + list(args)
+    # Wrangler 4.x defaults to local when no wrangler.toml is found in cwd.
+    # Always pass an explicit location flag.
     if LOCAL:
         cmd.append("--local")
+    else:
+        cmd.append("--remote")
     if capture:
         return subprocess.run(cmd, cwd=REPO_ROOT, check=check, capture_output=True, text=True)
     return subprocess.run(cmd, cwd=REPO_ROOT, check=check, text=True)

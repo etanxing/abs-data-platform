@@ -1,8 +1,6 @@
 -- ABS Data Platform - D1 Schema
 -- Census 2021, SEIFA 2021 (NSW + VIC MVP)
-
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
+-- Note: PRAGMA statements omitted — D1 does not support them
 
 -- ─────────────────────────────────────────────
 -- Core geography table (SA2 areas)

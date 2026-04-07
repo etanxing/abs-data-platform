@@ -17,8 +17,8 @@ binding = "CACHE"
 id = "a01d0b94f04444408b4a2b4308ceca56"
 
 [vars]
-DEMOREPORT_URL = "http://localhost:3001"
-GRANTDATA_URL = "http://localhost:3002"
+DEMOREPORT_URL = "https://demoreport-40p.pages.dev"
+GRANTDATA_URL = "https://grantdata.pages.dev"
 # Override secrets in Cloudflare dashboard (Settings → Variables)
 # or via `wrangler secret put <NAME>`
 STRIPE_SECRET_KEY = "sk_test_placeholder"

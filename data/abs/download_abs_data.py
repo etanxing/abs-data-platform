@@ -46,15 +46,32 @@ DOWNLOADS = [
         "extract": False,
     },
     {
-        "key": "postcode_sa2_correspondence",
-        "description": "ASGS 2021 Postcode → SA2 correspondence (CSV)",
+        # ABS removed the direct CG_POSTCODE_2021_SA2_2021.csv in ASGS Ed 3.
+        # We now derive the postcode→SA2 mapping by joining two allocation files:
+        #   MB_2021_AUST.xlsx   (Mesh Block → SA2 + all geography, ~35 MB)
+        #   POA_2021_AUST.xlsx  (Mesh Block → Postal Area/Postcode, ~18 MB)
+        # process_abs_data.py handles the join automatically.
+        "key": "mb_allocation",
+        "description": "ASGS 2021 MB allocation file (Mesh Block → SA2 + all geographies, ~35 MB)",
         "url": (
             "https://www.abs.gov.au/statistics/standards"
             "/australian-statistical-geography-standard-asgs-edition-3"
-            "/jul2021-jun2026/access-and-downloads/correspondences"
-            "/CG_POSTCODE_2021_SA2_2021.csv"
+            "/jul2021-jun2026/access-and-downloads/allocation-files"
+            "/MB_2021_AUST.xlsx"
         ),
-        "filename": "CG_POSTCODE_2021_SA2_2021.csv",
+        "filename": "MB_2021_AUST.xlsx",
+        "extract": False,
+    },
+    {
+        "key": "poa_allocation",
+        "description": "ASGS 2021 POA allocation file (Mesh Block → Postcode, ~18 MB)",
+        "url": (
+            "https://www.abs.gov.au/statistics/standards"
+            "/australian-statistical-geography-standard-asgs-edition-3"
+            "/jul2021-jun2026/access-and-downloads/allocation-files"
+            "/POA_2021_AUST.xlsx"
+        ),
+        "filename": "POA_2021_AUST.xlsx",
         "extract": False,
     },
     {
