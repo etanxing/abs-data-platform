@@ -5,16 +5,16 @@ compatibility_flags = ["nodejs_compat"]
 
 [[d1_databases]]
 binding = "DB"
-database_name = "abs-data"
-database_id = "placeholder-replace-with-real-id"
+database_name = "abs-data-prod"
+database_id = "c5989af6-e454-4843-8e27-098eca650e49"
 
 [[r2_buckets]]
 binding = "REPORTS"
-bucket_name = "abs-reports"
+bucket_name = "reports-storage"
 
 [[kv_namespaces]]
 binding = "CACHE"
-id = "placeholder-replace-with-real-id"
+id = "a01d0b94f04444408b4a2b4308ceca56"
 
 [vars]
 DEMOREPORT_URL = "http://localhost:3001"
