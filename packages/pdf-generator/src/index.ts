@@ -1,4 +1,4 @@
-import { PDFDocument, StandardFonts, rgb, grayscale, type PDFPage, type PDFFont } from "pdf-lib";
+import { PDFDocument, StandardFonts, rgb, type PDFPage, type PDFFont } from "pdf-lib";
 import type { ReportData } from "./report-types";
 
 export type { ReportData };
@@ -10,20 +10,23 @@ export interface GeneratedReport {
 
 // ─── Colour palette ───────────────────────────────────────────────────────────
 const BRAND   = rgb(0.055, 0.455, 0.831); // #0E74D4
+const BRAND_D = rgb(0.035, 0.32,  0.62);  // darker brand
 const DARK    = rgb(0.11,  0.11,  0.11);
 const MUTED   = rgb(0.45,  0.45,  0.45);
-const LIGHT   = rgb(0.96,  0.96,  0.97);
+const LIGHT   = rgb(0.95,  0.96,  0.98);
+const LIGHT2  = rgb(0.98,  0.98,  0.99);
 const WHITE   = rgb(1, 1, 1);
-const SUCCESS = rgb(0.13, 0.65, 0.38);
-const WARN    = rgb(0.93, 0.58, 0.11);
-const DANGER  = rgb(0.86, 0.21, 0.27);
+const SUCCESS = rgb(0.10, 0.60, 0.35);
+const WARN    = rgb(0.85, 0.52, 0.05);
+const DANGER  = rgb(0.78, 0.18, 0.22);
+const ACCENT  = rgb(0.97, 0.55, 0.10);
 
 // ─── Page constants (A4 points) ───────────────────────────────────────────────
-const PW = 595;   // page width
-const PH = 842;   // page height
-const ML = 50;    // margin left
-const MR = 50;    // margin right
-const CW = PW - ML - MR; // content width
+const PW = 595;
+const PH = 842;
+const ML = 48;
+const MR = 48;
+const CW = PW - ML - MR;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -44,259 +47,799 @@ function decileColour(d: number | null) {
   return DANGER;
 }
 
-// Draw a filled rectangle
+function decileLabel(d: number | null): string {
+  if (d == null) return "N/A";
+  if (d >= 8) return "High advantage";
+  if (d >= 5) return "Average";
+  return "Below average";
+}
+
 function rect(page: PDFPage, x: number, y: number, w: number, h: number, colour: ReturnType<typeof rgb>) {
   page.drawRectangle({ x, y, width: w, height: h, color: colour });
 }
 
-// Draw text with sensible defaults
-function text(
-  page: PDFPage,
-  str: string,
-  x: number,
-  y: number,
+function drawText(
+  page: PDFPage, str: string, x: number, y: number,
   opts: { font: PDFFont; size: number; color?: ReturnType<typeof rgb>; maxWidth?: number }
 ) {
   page.drawText(str, { x, y, font: opts.font, size: opts.size, color: opts.color ?? DARK, maxWidth: opts.maxWidth });
 }
 
-// Draw a horizontal rule
 function hr(page: PDFPage, y: number, color = LIGHT) {
-  page.drawLine({ start: { x: ML, y }, end: { x: PW - MR, y }, thickness: 1, color });
+  page.drawLine({ start: { x: ML, y }, end: { x: PW - MR, y }, thickness: 0.75, color });
 }
 
-// Draw a stat box: label on top, value below
-function statBox(
-  page: PDFPage,
-  x: number, y: number, w: number,
-  label: string, value: string,
-  bold: PDFFont, regular: PDFFont
-) {
-  rect(page, x, y, w, 62, LIGHT);
-  text(page, label, x + 10, y + 42, { font: regular, size: 8, color: MUTED });
-  text(page, value, x + 10, y + 16, { font: bold, size: 16, color: DARK, maxWidth: w - 20 });
+function sectionHeading(page: PDFPage, y: number, title: string, subtitle: string, bold: PDFFont, regular: PDFFont): number {
+  rect(page, ML, y, 4, 22, BRAND);
+  rect(page, ML + 4, y, CW - 4, 22, LIGHT);
+  drawText(page, title, ML + 14, y + 7, { font: bold, size: 12, color: DARK });
+  if (subtitle) drawText(page, subtitle, ML + 14 + bold.widthOfTextAtSize(title, 12) + 10, y + 8, { font: regular, size: 8.5, color: MUTED });
+  return y - 30;
 }
 
-// Draw a section heading with accent bar
-function sectionHeading(page: PDFPage, y: number, title: string, bold: PDFFont): number {
-  rect(page, ML, y, 4, 18, BRAND);
-  text(page, title, ML + 12, y + 4, { font: bold, size: 13, color: DARK });
-  return y - 34;
-}
-
-// Draw a key/value row
-function kvRow(page: PDFPage, y: number, label: string, value: string, regular: PDFFont, bold: PDFFont): number {
-  text(page, label, ML, y, { font: regular, size: 9, color: MUTED });
-  text(page, value, ML + 140, y, { font: bold, size: 9, color: DARK });
+function kvRow(page: PDFPage, y: number, label: string, value: string, note: string, regular: PDFFont, bold: PDFFont, zebra = false): number {
+  if (zebra) rect(page, ML, y - 3, CW, 16, LIGHT2);
+  drawText(page, label, ML + 6, y, { font: regular, size: 9, color: MUTED });
+  drawText(page, value, ML + 200, y, { font: bold, size: 9, color: DARK });
+  if (note) drawText(page, note, ML + 290, y, { font: regular, size: 8, color: MUTED, maxWidth: CW - 290 + MR - 6 });
   return y - 16;
+}
+
+function pageNum(page: PDFPage, n: number, total: number, regular: PDFFont) {
+  drawText(page, `Page ${n} of ${total}`, PW - MR - 50, 8, { font: regular, size: 7, color: MUTED });
 }
 
 // ─── Page factory ─────────────────────────────────────────────────────────────
 
-async function newPage(doc: PDFDocument, bold: PDFFont, regular: PDFFont, suburb: string): Promise<{ page: PDFPage; y: number }> {
+async function newPage(
+  doc: PDFDocument, bold: PDFFont, regular: PDFFont,
+  suburb: string, pageN: number, totalPages: number
+): Promise<{ page: PDFPage; y: number }> {
   const page = doc.addPage([PW, PH]);
 
   // Header bar
-  rect(page, 0, PH - 32, PW, 32, BRAND);
-  text(page, "DemoReport", ML, PH - 22, { font: bold, size: 11, color: WHITE });
-  text(page, suburb, PW - MR - 200, PH - 22, { font: regular, size: 9, color: WHITE, maxWidth: 200 });
+  rect(page, 0, PH - 30, PW, 30, BRAND);
+  drawText(page, "DemoReport", ML, PH - 20, { font: bold, size: 10, color: WHITE });
+  drawText(page, "Demographic Feasibility Report", ML + 84, PH - 20, { font: regular, size: 8.5, color: rgb(0.75, 0.88, 0.97) });
+  drawText(page, suburb, PW - MR, PH - 20, { font: bold, size: 8.5, color: WHITE, maxWidth: 180 });
 
   // Footer
-  rect(page, 0, 0, PW, 24, LIGHT);
-  text(page, "Generated by DemoReport · demoreport.com.au · ABS Census 2021 data", ML, 8, { font: regular, size: 7, color: MUTED });
+  rect(page, 0, 0, PW, 22, LIGHT);
+  page.drawLine({ start: { x: 0, y: 22 }, end: { x: PW, y: 22 }, thickness: 0.5, color: rgb(0.85, 0.87, 0.92) });
+  drawText(page, "DemoReport · demoreport.com.au · Data: ABS Census 2021 & SEIFA 2021 · Not financial or planning advice", ML, 7, { font: regular, size: 6.5, color: MUTED });
+  pageNum(page, pageN, totalPages, regular);
 
-  return { page, y: PH - 56 };
+  return { page, y: PH - 50 };
+}
+
+// ─── Stat box ─────────────────────────────────────────────────────────────────
+
+function statBox(
+  page: PDFPage, x: number, y: number, w: number, h: number,
+  label: string, value: string, sub: string,
+  bold: PDFFont, regular: PDFFont, accent: ReturnType<typeof rgb> = BRAND
+) {
+  rect(page, x, y, w, h, LIGHT);
+  rect(page, x, y + h - 3, w, 3, accent);
+  drawText(page, label, x + 8, y + h - 18, { font: regular, size: 7.5, color: MUTED, maxWidth: w - 16 });
+  drawText(page, value, x + 8, y + 18, { font: bold, size: 17, color: DARK, maxWidth: w - 16 });
+  if (sub) drawText(page, sub, x + 8, y + 7, { font: regular, size: 7, color: MUTED, maxWidth: w - 16 });
+}
+
+// ─── Horizontal bar chart ─────────────────────────────────────────────────────
+
+function barChart(
+  page: PDFPage, y: number,
+  bands: [string, number | null][],
+  regular: PDFFont, bold: PDFFont,
+  colour: ReturnType<typeof rgb> = BRAND
+): number {
+  const maxVal = Math.max(...bands.map(([, v]) => v ?? 0));
+  const barMaxW = CW - 130;
+  for (const [label, val] of bands) {
+    const barW = maxVal > 0 && val != null ? (val / maxVal) * barMaxW : 0;
+    drawText(page, label, ML, y + 1, { font: regular, size: 8, color: MUTED });
+    if (barW > 0) rect(page, ML + 68, y, barW, 11, colour);
+    rect(page, ML + 68 + barW, y, barMaxW - barW, 11, LIGHT);
+    drawText(page, pct(val), ML + 68 + barMaxW + 6, y + 1, { font: bold, size: 8, color: DARK });
+    y -= 16;
+  }
+  return y - 4;
+}
+
+// ─── SEIFA decile gauge ───────────────────────────────────────────────────────
+
+function seifaRow(
+  page: PDFPage, y: number,
+  name: string, score: number | null, decile: number | null,
+  regular: PDFFont, bold: PDFFont, italic: PDFFont,
+  zebra = false
+): number {
+  if (zebra) rect(page, ML, y - 4, CW, 34, LIGHT2);
+  drawText(page, name, ML + 6, y + 16, { font: bold, size: 9, color: DARK });
+  drawText(page, decileLabel(decile), ML + 6, y + 5, { font: italic, size: 8, color: MUTED });
+
+  // Score
+  drawText(page, `Score: ${fmt(score)}`, ML + CW - 160, y + 16, { font: regular, size: 9, color: MUTED });
+
+  // Decile pip track
+  const trackX = ML + CW - 160;
+  const trackY = y + 3;
+  for (let i = 1; i <= 10; i++) {
+    const col = i <= (decile ?? 0) ? decileColour(decile) : LIGHT;
+    rect(page, trackX + (i - 1) * 12, trackY, 10, 8, col);
+  }
+  drawText(page, decile != null ? `${decile}/10` : "N/A", trackX + 124, trackY, { font: bold, size: 8, color: decileColour(decile) });
+
+  return y - 38;
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────
 
+const TOTAL_PAGES = 10;
+
 /**
- * Generate a DemoReport Feasibility Report PDF using pdf-lib.
- * Pure JS — no WASM, no Node.js APIs. Works in Cloudflare Workers.
+ * Generate a 10-page DemoReport Feasibility Report PDF using pdf-lib.
+ * Pure JS — no WASM, no Node.js APIs. Compatible with Cloudflare Workers.
  */
 export async function generateFeasibilityReport(data: ReportData): Promise<GeneratedReport> {
   const doc = await PDFDocument.create();
   doc.setTitle(`DemoReport — ${data.suburb} ${data.state}`);
   doc.setAuthor("DemoReport");
   doc.setSubject(`Demographic Feasibility Report — ${data.suburb}, ${data.state}`);
-  doc.setKeywords(["ABS", "Census", "SEIFA", "demographics", "feasibility"]);
+  doc.setKeywords(["ABS", "Census", "SEIFA", "demographics", "feasibility", "property"]);
   doc.setCreator("DemoReport (demoreport.com.au)");
   doc.setCreationDate(new Date());
 
   const bold    = await doc.embedFont(StandardFonts.HelveticaBold);
   const regular = await doc.embedFont(StandardFonts.Helvetica);
   const italic  = await doc.embedFont(StandardFonts.HelveticaOblique);
+  const boldObl = await doc.embedFont(StandardFonts.HelveticaBoldOblique);
 
-  const label = `${data.suburb}, ${data.state}${data.postcode ? ` ${data.postcode}` : ""}`;
+  const suburb = data.suburb;
+  const label  = `${suburb}, ${data.state}${data.postcode ? ` ${data.postcode}` : ""}`;
+  const d      = data.demographics;
+  const h      = data.housing;
+  const s      = data.seifa;
+  const ad     = d.ageDistribution;
 
-  // ── Cover page ──────────────────────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════
+  // PAGE 1 — Cover
+  // ══════════════════════════════════════════════════════════════
   {
     const page = doc.addPage([PW, PH]);
 
-    // Full-width brand header
-    rect(page, 0, PH - 120, PW, 120, BRAND);
-    text(page, "DemoReport", ML, PH - 55,  { font: bold, size: 28, color: WHITE });
-    text(page, "Demographic Feasibility Report", ML, PH - 80, { font: regular, size: 14, color: rgb(0.75, 0.88, 0.97) });
+    // Full-bleed header
+    rect(page, 0, PH - 180, PW, 180, BRAND);
+    rect(page, 0, PH - 183, PW, 3, ACCENT);
 
-    // Suburb badge
-    rect(page, ML, PH - 175, CW, 44, LIGHT);
-    text(page, label, ML + 14, PH - 146, { font: bold, size: 18, color: DARK });
-    text(page, `SA2 Code: ${data.sa2Code}`, ML + 14, PH - 165, { font: regular, size: 9, color: MUTED });
+    // Brand wordmark
+    drawText(page, "DemoReport", ML, PH - 60, { font: bold, size: 34, color: WHITE });
+    drawText(page, "Demographic Feasibility Report", ML, PH - 86, { font: regular, size: 15, color: rgb(0.75, 0.88, 0.97) });
+    drawText(page, "Powered by ABS Census 2021 & SEIFA 2021", ML, PH - 104, { font: italic, size: 9, color: rgb(0.65, 0.80, 0.93) });
 
-    // Summary stat row
-    const d = data.demographics;
-    const h = data.housing;
-    const boxW = (CW - 12) / 4;
+    // Suburb banner inside header
+    rect(page, ML, PH - 162, CW, 44, BRAND_D);
+    drawText(page, label, ML + 12, PH - 134, { font: bold, size: 20, color: WHITE });
+    drawText(page, `SA2 Code: ${data.sa2Code}   ·   Census Year: ${data.censusYear}`, ML + 12, PH - 152, { font: regular, size: 9, color: rgb(0.75, 0.88, 0.97) });
+
+    // 6-stat grid
+    const boxW  = (CW - 8) / 3;
+    const boxH  = 70;
     let bx = ML;
-    const statY = PH - 265;
+    let by = PH - 270;
 
-    const stats: [string, string][] = [
-      ["Total Population",    fmt(d.totalPopulation)],
-      ["Median Age",          fmt(d.medianAge, "", " yrs")],
-      ["Median HH Income",    fmt(d.medianHouseholdIncome, "$", "/wk")],
-      ["Median Rent",         fmt(h.medianRentWeekly, "$", "/wk")],
+    const coverStats: [string, string, string, ReturnType<typeof rgb>][] = [
+      ["Total Population",      fmt(d.totalPopulation),              "residents (ABS 2021)",       BRAND],
+      ["Median Age",            fmt(d.medianAge, "", " yrs"),        "across all residents",       SUCCESS],
+      ["Median HH Income",      fmt(d.medianHouseholdIncome, "$", "/wk"), "household weekly income", ACCENT],
+      ["Median Personal Income",fmt(d.medianPersonalIncome, "$", "/wk"),  "personal weekly income", rgb(0.45, 0.31, 0.78)],
+      ["Median Weekly Rent",    fmt(h.medianRentWeekly, "$", "/wk"), "private dwellings",          rgb(0.12, 0.60, 0.55)],
+      ["Median Mortgage",       fmt(h.medianMortgageMonthly, "$", "/mo"), "monthly repayment",     rgb(0.72, 0.22, 0.56)],
     ];
-    for (const [lbl, val] of stats) {
-      statBox(page, bx, statY, boxW, lbl, val, bold, regular);
+
+    for (let i = 0; i < coverStats.length; i++) {
+      const [lbl, val, sub, acc] = coverStats[i];
+      if (i === 3) { bx = ML; by -= boxH + 6; }
+      statBox(page, bx, by, boxW, boxH, lbl, val, sub, bold, regular, acc);
       bx += boxW + 4;
     }
 
-    // SEIFA highlight
-    let sy = PH - 360;
-    text(page, "SEIFA Indices (2021)", ML, sy, { font: bold, size: 12, color: DARK });
-    sy -= 20;
+    // Table of contents
+    let ty = by - 30;
+    drawText(page, "Report Contents", ML, ty, { font: bold, size: 11, color: DARK });
+    ty -= 6;
+    hr(page, ty, LIGHT);
+    ty -= 16;
 
-    const indices: [string, number | null, number | null][] = [
-      ["IRSD — Relative Socio-Economic Disadvantage", data.seifa.irsd, data.seifa.irsdDecile],
-      ["IRSAD — Relative Socio-Economic Advantage & Disadvantage", data.seifa.irsad, data.seifa.irsadDecile],
-      ["IER — Economic Resources", data.seifa.ier, data.seifa.ierDecile],
-      ["IEO — Education & Occupation", data.seifa.ieo, data.seifa.ieoDecile],
+    const toc: [string, number][] = [
+      ["Executive Summary",             2],
+      ["Section 1 — Population & Demographics",    3],
+      ["Section 2 — Age Distribution",             4],
+      ["Section 3 — Income & Employment",          5],
+      ["Section 4 — Housing Stock & Tenure",       6],
+      ["Section 5 — SEIFA Socio-Economic Indices", 7],
+      ["Section 6 — Language & Cultural Diversity",8],
+      ["Section 7 — Suburb Comparison Snapshot",   9],
+      ["Data Sources & Methodology",              10],
     ];
 
-    for (const [name, score, decile] of indices) {
-      text(page, name, ML, sy, { font: regular, size: 9, color: MUTED, maxWidth: CW - 120 });
-      text(page, fmt(score), ML + CW - 110, sy, { font: bold, size: 9, color: DARK });
-      if (decile != null) {
-        const col = decileColour(decile);
-        rect(page, ML + CW - 60, sy - 2, 44, 14, col);
-        text(page, `Decile ${decile}`, ML + CW - 57, sy + 1, { font: bold, size: 8, color: WHITE });
-      }
-      sy -= 20;
-      hr(page, sy + 4, LIGHT);
+    for (const [title, pg] of toc) {
+      drawText(page, title, ML + 6, ty, { font: regular, size: 9, color: DARK });
+      drawText(page, `${pg}`, PW - MR - 10, ty, { font: regular, size: 9, color: MUTED });
+      page.drawLine({ start: { x: ML + 6 + regular.widthOfTextAtSize(title, 9) + 4, y: ty + 3 }, end: { x: PW - MR - 16, y: ty + 3 }, thickness: 0.5, color: LIGHT, dashArray: [2, 2], dashPhase: 0 });
+      ty -= 16;
     }
 
-    // Disclaimer
-    text(page, `Generated ${data.generatedAt} · Data: ABS Census 2021, SEIFA 2021`, ML, 60, { font: italic, size: 7.5, color: MUTED });
-    text(page, "This report is provided for informational purposes only. Not financial or planning advice.", ML, 48, { font: italic, size: 7.5, color: MUTED });
+    // Footer
+    rect(page, 0, 0, PW, 34, LIGHT);
+    page.drawLine({ start: { x: 0, y: 34 }, end: { x: PW, y: 34 }, thickness: 0.5, color: rgb(0.85, 0.87, 0.92) });
+    drawText(page, `Generated: ${data.generatedAt}`, ML, 20, { font: regular, size: 7.5, color: MUTED });
+    drawText(page, "demoreport.com.au", ML, 9, { font: bold, size: 7.5, color: BRAND });
+    drawText(page, "This report is for informational purposes only. Not financial, planning, or investment advice.", ML + 140, 9, { font: italic, size: 7, color: MUTED, maxWidth: 300 });
+    drawText(page, "Page 1 of 10", PW - MR - 54, 9, { font: regular, size: 7, color: MUTED });
   }
 
-  // ── Page 2 — Demographics ──────────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════
+  // PAGE 2 — Executive Summary
+  // ══════════════════════════════════════════════════════════════
   {
-    const { page, y: startY } = await newPage(doc, bold, regular, label);
+    const { page, y: startY } = await newPage(doc, bold, regular, label, 2, TOTAL_PAGES);
     let y = startY;
 
-    y = sectionHeading(page, y, "Demographics", bold);
+    drawText(page, "Executive Summary", ML, y, { font: bold, size: 16, color: DARK });
+    y -= 6;
+    hr(page, y, BRAND);
+    y -= 20;
 
-    const d = data.demographics;
-    y = kvRow(page, y, "Total Population",           fmt(d.totalPopulation),                  regular, bold);
-    y = kvRow(page, y, "Median Age",                 fmt(d.medianAge, "", " years"),           regular, bold);
-    y = kvRow(page, y, "Median Household Income",    fmt(d.medianHouseholdIncome, "$", "/wk"), regular, bold);
-    y = kvRow(page, y, "Median Personal Income",     fmt(d.medianPersonalIncome, "$", "/wk"),  regular, bold);
-    y = kvRow(page, y, "Indigenous Population",      pct(d.indigenousPopulation),              regular, bold);
-    y = kvRow(page, y, "Born Overseas",              pct(d.bornOverseas),                      regular, bold);
-    y = kvRow(page, y, "Speaks English Only",        pct(d.speaksEnglishOnly),                 regular, bold);
+    // Lead paragraph
+    const irsdDecile = s.irsdDecile ?? 0;
+    const affluence = irsdDecile >= 8 ? "an affluent" : irsdDecile >= 5 ? "a mid-tier" : "a lower socio-economic";
+    const pop = d.totalPopulation != null ? `${d.totalPopulation.toLocaleString("en-AU")} residents` : "residents";
+    const age = d.medianAge != null ? ` The median age of ${d.medianAge} years` : "";
+    const summary =
+      `${suburb} is ${affluence} suburb with ${pop} recorded in the 2021 ABS Census.` +
+      `${age} ${d.medianAge && d.medianAge < 35 ? "indicates a younger, potentially first-home-buyer demographic." : d.medianAge && d.medianAge > 45 ? "indicates an older, established residential demographic." : "reflects a broad age mix across the community."}`;
+
+    drawText(page, summary, ML, y, { font: regular, size: 9.5, color: DARK, maxWidth: CW });
+    y -= 40;
+
+    // Key findings boxes
+    drawText(page, "Key Findings", ML, y, { font: bold, size: 11, color: DARK });
+    y -= 20;
+
+    const findings: [string, string, ReturnType<typeof rgb>][] = [
+      [
+        "Socio-Economic Status",
+        `IRSD decile ${s.irsdDecile ?? "N/A"}/10 places ${suburb} in the ${decileLabel(s.irsdDecile).toLowerCase()} bracket nationally. IRSAD score of ${fmt(s.irsad)} reflects ${s.irsadDecile && s.irsadDecile >= 7 ? "above-average" : "below-average"} socio-economic advantage and disadvantage.`,
+        decileColour(s.irsdDecile),
+      ],
+      [
+        "Housing Affordability",
+        `Median weekly rent of ${fmt(h.medianRentWeekly, "$")} and monthly mortgage repayment of ${fmt(h.medianMortgageMonthly, "$")} suggest ${h.medianRentWeekly && h.medianRentWeekly > 500 ? "a higher-cost" : "a moderate-cost"} rental and ownership market. Total dwellings: ${fmt(h.totalDwellings)}.`,
+        BRAND,
+      ],
+      [
+        "Income Profile",
+        `Median household income of ${fmt(d.medianHouseholdIncome, "$", "/wk")} and personal income of ${fmt(d.medianPersonalIncome, "$", "/wk")} indicate ${d.medianHouseholdIncome && d.medianHouseholdIncome > 1800 ? "above-average" : "average"} earning capacity relative to the national median (~$1,746/wk).`,
+        SUCCESS,
+      ],
+      [
+        "Population Composition",
+        `${pct(d.indigenousPopulation)} of residents identify as Aboriginal or Torres Strait Islander. ${d.bornOverseas != null ? `${pct(d.bornOverseas)} were born overseas.` : ""} The suburb has ${d.totalPopulation && d.totalPopulation > 15000 ? "a large" : d.totalPopulation && d.totalPopulation > 5000 ? "a medium" : "a smaller"} population base.`,
+        ACCENT,
+      ],
+    ];
+
+    for (const [title, body, accent] of findings) {
+      rect(page, ML, y - 42, CW, 52, LIGHT2);
+      rect(page, ML, y - 42, 4, 52, accent);
+      drawText(page, title, ML + 12, y + 1, { font: bold, size: 9.5, color: DARK });
+      drawText(page, body, ML + 12, y - 12, { font: regular, size: 8.5, color: MUTED, maxWidth: CW - 18 });
+      y -= 60;
+    }
+
+    y -= 10;
+    hr(page, y, LIGHT);
+    y -= 16;
+    drawText(page, "Note: This executive summary is automatically generated from ABS 2021 Census data. Refer to individual sections for full detail.", ML, y, { font: italic, size: 7.5, color: MUTED, maxWidth: CW });
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // PAGE 3 — Section 1: Population & Demographics
+  // ══════════════════════════════════════════════════════════════
+  {
+    const { page, y: startY } = await newPage(doc, bold, regular, label, 3, TOTAL_PAGES);
+    let y = startY;
+
+    y = sectionHeading(page, y, "Section 1 — Population & Demographics", "ABS Census 2021 · SA2 Level", bold, regular);
+
+    const rows: [string, string, string][] = [
+      ["Total Population",               fmt(d.totalPopulation),                    "persons (usual residents)"],
+      ["Median Age",                     fmt(d.medianAge, "", " years"),             "across all residents"],
+      ["Median Household Income",        fmt(d.medianHouseholdIncome, "$", "/wk"),   "weekly (before tax)"],
+      ["Median Personal Income",         fmt(d.medianPersonalIncome, "$", "/wk"),    "weekly (before tax)"],
+      ["Aboriginal & Torres Strait Islander", pct(d.indigenousPopulation),           "of total population"],
+      ["Born Overseas",                  pct(d.bornOverseas),                        "of total population"],
+      ["Speaks English Only at Home",    pct(d.speaksEnglishOnly),                   "of total population"],
+      ["Families with Children",         pct(d.familiesWithChildren),                "of all family households"],
+      ["Single-Parent Families",         pct(d.singleParentFamilies),                "of all family households"],
+    ];
+
+    let zebra = false;
+    for (const [lbl, val, note] of rows) {
+      y = kvRow(page, y, lbl, val, note, regular, bold, zebra);
+      zebra = !zebra;
+    }
+
+    y -= 12;
+    hr(page, y);
+    y -= 20;
+
+    // Insight box
+    drawText(page, "Interpretation", ML, y, { font: bold, size: 10, color: DARK });
+    y -= 14;
+    rect(page, ML, y - 52, CW, 60, LIGHT2);
+    rect(page, ML, y - 52, 4, 60, BRAND);
+    const insight =
+      `With a median age of ${fmt(d.medianAge, "", " years")} and median household income of ` +
+      `${fmt(d.medianHouseholdIncome, "$", "/wk")}, ${suburb} presents a ` +
+      `${d.medianAge && d.medianAge < 38 ? "younger, family-forming" : "more established"} demographic profile. ` +
+      `${d.indigenousPopulation && d.indigenousPopulation > 0.05 ? "The above-average Indigenous population proportion should inform cultural engagement planning." : ""}` +
+      `${d.bornOverseas && d.bornOverseas > 0.30 ? " High overseas-born proportion suggests strong demand for multilingual services." : ""}`;
+    drawText(page, insight, ML + 10, y - 6, { font: regular, size: 8.5, color: DARK, maxWidth: CW - 18 });
+    y -= 70;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // PAGE 4 — Section 2: Age Distribution
+  // ══════════════════════════════════════════════════════════════
+  {
+    const { page, y: startY } = await newPage(doc, bold, regular, label, 4, TOTAL_PAGES);
+    let y = startY;
+
+    y = sectionHeading(page, y, "Section 2 — Age Distribution", "Five-year age groups · ABS Census 2021", bold, regular);
+
+    const ageBands: [string, number | null][] = [
+      ["0–4 years",   ad["0_4"]],
+      ["5–14 years",  ad["5_14"]],
+      ["15–24 years", ad["15_24"]],
+      ["25–34 years", ad["25_34"]],
+      ["35–44 years", ad["35_44"]],
+      ["45–54 years", ad["45_54"]],
+      ["55–64 years", ad["55_64"]],
+      ["65–74 years", ad["65_74"]],
+      ["75+ years",   ad["75_plus"]],
+    ];
+
+    y = barChart(page, y, ageBands, regular, bold, BRAND);
+    y -= 12;
+    hr(page, y);
+    y -= 20;
+
+    // Derived insights
+    drawText(page, "Age Band Analysis", ML, y, { font: bold, size: 10, color: DARK });
+    y -= 18;
+
+    const workingAge = (ad["25_34"] ?? 0) + (ad["35_44"] ?? 0) + (ad["45_54"] ?? 0);
+    const youth      = (ad["0_4"] ?? 0) + (ad["5_14"] ?? 0) + (ad["15_24"] ?? 0);
+    const seniors    = (ad["65_74"] ?? 0) + (ad["75_plus"] ?? 0);
+
+    const aggRows: [string, string, string][] = [
+      ["Working Age (25–54)",   pct(workingAge), workingAge > 0.45 ? "Strong working-age core — supports services demand" : "Below average working-age presence"],
+      ["Youth (0–24)",          pct(youth),      youth > 0.30 ? "Young population — family-service infrastructure demand" : "Moderate youth cohort"],
+      ["Seniors (65+)",         pct(seniors),    seniors > 0.20 ? "Ageing population — aged care & healthcare demand" : "Below-average senior cohort"],
+    ];
+
+    let zebra = false;
+    for (const [lbl, val, note] of aggRows) {
+      y = kvRow(page, y, lbl, val, note, regular, bold, zebra);
+      zebra = !zebra;
+    }
+
+    y -= 20;
+    // Dependency ratio note
+    const dependencyRatio = workingAge > 0 ? ((youth + seniors) / workingAge).toFixed(2) : "N/A";
+    rect(page, ML, y - 30, CW, 40, LIGHT2);
+    rect(page, ML, y - 30, 4, 40, ACCENT);
+    drawText(page, `Estimated Dependency Ratio: ${dependencyRatio}`, ML + 10, y + 1, { font: bold, size: 9.5, color: DARK });
+    drawText(page, "Ratio of dependants (youth + seniors) to working-age population. Lower = more economically active community.", ML + 10, y - 12, { font: regular, size: 8.5, color: MUTED, maxWidth: CW - 18 });
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // PAGE 5 — Section 3: Income & Employment
+  // ══════════════════════════════════════════════════════════════
+  {
+    const { page, y: startY } = await newPage(doc, bold, regular, label, 5, TOTAL_PAGES);
+    let y = startY;
+
+    y = sectionHeading(page, y, "Section 3 — Income & Employment", "ABS Census 2021 · SA2 Level", bold, regular);
+
+    const incomeRows: [string, string, string][] = [
+      ["Median Household Income",  fmt(d.medianHouseholdIncome, "$", "/wk"),  "weekly, before tax"],
+      ["Median Personal Income",   fmt(d.medianPersonalIncome, "$", "/wk"),   "weekly, before tax"],
+      ["Annualised HH Income",     fmt(d.medianHouseholdIncome ? d.medianHouseholdIncome * 52 : null, "$"), "estimated annual"],
+      ["Annualised Personal",      fmt(d.medianPersonalIncome ? d.medianPersonalIncome * 52 : null, "$"),   "estimated annual"],
+      ["vs National Median HH",    d.medianHouseholdIncome != null ? (d.medianHouseholdIncome > 1746 ? `+$${(d.medianHouseholdIncome - 1746).toFixed(0)}/wk above` : `-$${(1746 - d.medianHouseholdIncome).toFixed(0)}/wk below`) : "N/A", "national median ~$1,746/wk (ABS 2021)"],
+    ];
+
+    let zebra = false;
+    for (const [lbl, val, note] of incomeRows) {
+      y = kvRow(page, y, lbl, val, note, regular, bold, zebra);
+      zebra = !zebra;
+    }
+
+    y -= 12;
+    hr(page, y);
+    y -= 20;
+
+    // Income interpretation
+    drawText(page, "Income Context for Development Planning", ML, y, { font: bold, size: 10, color: DARK });
+    y -= 18;
+
+    const incPoints = [
+      `Household income of ${fmt(d.medianHouseholdIncome, "$", "/wk")} implies maximum comfortable mortgage (30% income rule) of approx. ${fmt(d.medianHouseholdIncome ? Math.round(d.medianHouseholdIncome * 0.3 * 52 / 12) : null, "$", "/mo")}.`,
+      `Personal income suggests ${d.medianPersonalIncome && d.medianPersonalIncome > 800 ? "a predominantly full-time employed" : "a mixed employment"} workforce profile.`,
+      `${d.medianHouseholdIncome && d.medianHouseholdIncome > 2000 ? "Above-average household income indicates market capacity for premium residential product." : "Moderate incomes suggest demand for mid-market or affordable housing typologies."}`,
+    ];
+
+    for (const pt of incPoints) {
+      rect(page, ML, y - 2, 5, 5, BRAND);
+      drawText(page, pt, ML + 12, y, { font: regular, size: 9, color: DARK, maxWidth: CW - 12 });
+      y -= 24;
+    }
+
     y -= 10;
     hr(page, y);
     y -= 20;
 
-    // Age distribution bar chart
-    y = sectionHeading(page, y, "Age Distribution", bold);
-    const ad = d.ageDistribution;
-    const bands: [string, number | null][] = [
-      ["0–4",   ad["0_4"]],
-      ["5–14",  ad["5_14"]],
-      ["15–24", ad["15_24"]],
-      ["25–34", ad["25_34"]],
-      ["35–44", ad["35_44"]],
-      ["45–54", ad["45_54"]],
-      ["55–64", ad["55_64"]],
-      ["65–74", ad["65_74"]],
-      ["75+",   ad["75_plus"]],
-    ];
-
-    const barMaxW = CW - 100;
-    const maxPct  = Math.max(...bands.map(([, v]) => v ?? 0));
-
-    for (const [bandLabel, val] of bands) {
-      const barW = maxPct > 0 && val != null ? (val / maxPct) * barMaxW : 0;
-      text(page, bandLabel, ML, y + 2, { font: regular, size: 8, color: MUTED });
-      rect(page, ML + 44, y, barW, 11, BRAND);
-      text(page, pct(val), ML + 44 + barW + 6, y + 2, { font: regular, size: 8, color: MUTED });
-      y -= 17;
-    }
+    drawText(page, "Limitations", ML, y, { font: bold, size: 9, color: MUTED });
+    y -= 14;
+    drawText(page, "Census income data is self-reported and may underrepresent investment income, trusts, and business income. Employment status data (labour force participation, unemployment) is available in ABS TableBuilder but not included in the standard GCP short-header DataPack used here.", ML, y, { font: italic, size: 8, color: MUTED, maxWidth: CW });
   }
 
-  // ── Page 3 — Housing ───────────────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════
+  // PAGE 6 — Section 4: Housing Stock & Tenure
+  // ══════════════════════════════════════════════════════════════
   {
-    const { page, y: startY } = await newPage(doc, bold, regular, label);
+    const { page, y: startY } = await newPage(doc, bold, regular, label, 6, TOTAL_PAGES);
     let y = startY;
 
-    y = sectionHeading(page, y, "Housing", bold);
+    y = sectionHeading(page, y, "Section 4 — Housing Stock & Tenure", "ABS Census 2021 · SA2 Level", bold, regular);
 
-    const h = data.housing;
-    y = kvRow(page, y, "Median Weekly Rent",     fmt(h.medianRentWeekly, "$", "/wk"),       regular, bold);
-    y = kvRow(page, y, "Median Monthly Mortgage",fmt(h.medianMortgageMonthly, "$", "/mo"),   regular, bold);
-    y = kvRow(page, y, "Median House Price",     fmt(h.medianHousePrice, "$"),               regular, bold);
-    y = kvRow(page, y, "Total Dwellings",        fmt(h.totalDwellings),                      regular, bold);
-    y = kvRow(page, y, "Owner-Occupied",         pct(h.ownerOccupied),                       regular, bold);
-    y = kvRow(page, y, "Renting",                pct(h.renting),                             regular, bold);
-    y = kvRow(page, y, "Social Housing",         pct(h.socialHousing),                       regular, bold);
-    y -= 10;
+    const housingRows: [string, string, string][] = [
+      ["Total Dwellings",           fmt(h.totalDwellings),                         "all private dwellings"],
+      ["Median Weekly Rent",        fmt(h.medianRentWeekly, "$", "/wk"),           "private rental market"],
+      ["Median Monthly Mortgage",   fmt(h.medianMortgageMonthly, "$", "/mo"),      "owner-occupier repayment"],
+      ["Median House Price",        fmt(h.medianHousePrice, "$"),                   "if available"],
+      ["Owner-Occupied",            pct(h.ownerOccupied),                           "of all dwellings"],
+      ["Renting",                   pct(h.renting),                                 "private rental"],
+      ["Social / Public Housing",   pct(h.socialHousing),                           "government-managed"],
+    ];
+
+    let zebra = false;
+    for (const [lbl, val, note] of housingRows) {
+      y = kvRow(page, y, lbl, val, note, regular, bold, zebra);
+      zebra = !zebra;
+    }
+
+    y -= 12;
     hr(page, y);
     y -= 20;
 
-    // ── SEIFA detail ─────────────────────────────────────────────────────────
-    y = sectionHeading(page, y, "SEIFA 2021 — Socio-Economic Indices", bold);
+    // Tenure split bar
+    drawText(page, "Tenure Profile", ML, y, { font: bold, size: 10, color: DARK });
+    y -= 20;
 
-    const s = data.seifa;
-    const rows: [string, number | null, number | null][] = [
-      ["IRSD  Relative Disadvantage",             s.irsd,  s.irsdDecile],
-      ["IRSAD Advantage & Disadvantage",          s.irsad, s.irsadDecile],
-      ["IER   Economic Resources",                s.ier,   s.ierDecile],
-      ["IEO   Education & Occupation",            s.ieo,   s.ieoDecile],
+    const tenureItems: [string, number | null, ReturnType<typeof rgb>][] = [
+      ["Owner-Occupied", h.ownerOccupied, SUCCESS],
+      ["Renting",        h.renting,       BRAND],
+      ["Social Housing", h.socialHousing, ACCENT],
     ];
 
-    for (const [name, score, decile] of rows) {
-      text(page, name, ML, y, { font: regular, size: 9.5, color: DARK });
-      text(page, `Score: ${fmt(score)}`, ML + CW - 160, y, { font: regular, size: 9, color: MUTED });
-      if (decile != null) {
-        const col = decileColour(decile);
-        rect(page, ML + CW - 70, y - 2, 60, 15, col);
-        text(page, `Decile ${decile}/10`, ML + CW - 67, y + 1, { font: bold, size: 8.5, color: WHITE });
-      }
+    for (const [lbl, val, col] of tenureItems) {
+      const w = val != null ? val * CW : 0;
+      drawText(page, lbl, ML, y + 2, { font: regular, size: 8.5, color: DARK });
+      rect(page, ML + 100, y, w > 0 ? w * 0.85 : 0, 13, col);
+      drawText(page, pct(val), ML + 100 + (w > 0 ? w * 0.85 + 6 : 6), y + 2, { font: bold, size: 8.5, color: DARK });
       y -= 22;
-      hr(page, y + 6, LIGHT);
     }
 
-    y -= 20;
-    text(page, "Higher deciles indicate higher advantage. Decile 10 = most advantaged 10% of areas in Australia.", ML, y, { font: italic, size: 8, color: MUTED, maxWidth: CW });
-    y -= 20;
-
-    // ── Data sources ──────────────────────────────────────────────────────────
-    y -= 10;
+    y -= 8;
     hr(page, y);
     y -= 20;
-    y = sectionHeading(page, y, "Data Sources", bold);
-    const sources = [
-      ["ABS Census 2021", "General Community Profile (GCP) — SA2 level"],
-      ["SEIFA 2021",      "Socio-Economic Indexes for Areas — SA2 level"],
-      ["Geography",       "ASGS Edition 3 — SA2/Postcode concordance"],
+
+    // Housing insight
+    drawText(page, "Planning Implications", ML, y, { font: bold, size: 10, color: DARK });
+    y -= 18;
+
+    const rentPressure = h.medianRentWeekly && h.medianRentWeekly > 500 ? "high" : "moderate";
+    const ownerPct     = h.ownerOccupied != null ? (h.ownerOccupied * 100).toFixed(0) : "N/A";
+
+    const housingPoints = [
+      `${ownerPct}% owner-occupier rate indicates a ${parseInt(ownerPct) > 65 ? "predominantly owner-occupier community — stable demand for quality family product." : "mixed tenure profile — opportunity for both rental and ownership product."}`,
+      `${rentPressure.charAt(0).toUpperCase() + rentPressure.slice(1)} rental pressure (${fmt(h.medianRentWeekly, "$", "/wk")}) ${rentPressure === "high" ? "suggests undersupply — strong case for new rental product." : "suggests a balanced rental market."}`,
+      `Mortgage serviceability: ${fmt(h.medianMortgageMonthly, "$", "/mo")} median repayment relative to ${fmt(d.medianHouseholdIncome, "$", "/wk")} household income suggests ${h.medianMortgageMonthly && d.medianHouseholdIncome ? ((h.medianMortgageMonthly / (d.medianHouseholdIncome * 4.33)) * 100).toFixed(0) + "% of income on mortgage" : "serviceability data unavailable"}.`,
     ];
-    for (const [src, detail] of sources) {
-      text(page, `• ${src}`, ML, y, { font: bold, size: 8.5, color: DARK });
-      text(page, detail, ML + 100, y, { font: regular, size: 8.5, color: MUTED, maxWidth: CW - 100 });
-      y -= 16;
+
+    for (const pt of housingPoints) {
+      rect(page, ML, y - 2, 5, 5, SUCCESS);
+      drawText(page, pt, ML + 12, y, { font: regular, size: 9, color: DARK, maxWidth: CW - 12 });
+      y -= 26;
     }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // PAGE 7 — Section 5: SEIFA
+  // ══════════════════════════════════════════════════════════════
+  {
+    const { page, y: startY } = await newPage(doc, bold, regular, label, 7, TOTAL_PAGES);
+    let y = startY;
+
+    y = sectionHeading(page, y, "Section 5 — SEIFA Socio-Economic Indices", "ABS SEIFA 2021 · SA2 Level", bold, regular);
+
+    drawText(page, "SEIFA (Socio-Economic Indexes for Areas) measures the relative socio-economic advantage and disadvantage of Australian communities. Scores and deciles are relative to all SA2 areas nationally.", ML, y, { font: italic, size: 8.5, color: MUTED, maxWidth: CW });
+    y -= 30;
+
+    const seifaRows: [string, string, number | null, number | null][] = [
+      ["IRSD",  "Index of Relative Socio-Economic Disadvantage — measures disadvantage only. Lower score = more disadvantaged.",   s.irsd,  s.irsdDecile],
+      ["IRSAD", "Index of Relative Socio-Economic Advantage & Disadvantage — measures both extremes.",                              s.irsad, s.irsadDecile],
+      ["IER",   "Index of Economic Resources — focuses on income, wealth, and housing costs.",                                     s.ier,   s.ierDecile],
+      ["IEO",   "Index of Education and Occupation — measures education levels and occupational skill.",                           s.ieo,   s.ieoDecile],
+    ];
+
+    for (let i = 0; i < seifaRows.length; i++) {
+      const [code, desc, score, decile] = seifaRows[i];
+
+      // Card background
+      rect(page, ML, y - 60, CW, 68, i % 2 === 0 ? LIGHT2 : WHITE);
+      rect(page, ML, y - 60, 4, 68, decileColour(decile));
+
+      drawText(page, code, ML + 12, y + 2, { font: bold, size: 13, color: DARK });
+      drawText(page, `Score: ${fmt(score)}`, ML + 12, y - 14, { font: bold, size: 10, color: decileColour(decile) });
+      drawText(page, desc, ML + 12, y - 27, { font: regular, size: 8, color: MUTED, maxWidth: CW - 140 });
+
+      // Decile pips
+      const pipX = ML + CW - 128;
+      drawText(page, "Decile", pipX, y + 2, { font: regular, size: 7.5, color: MUTED });
+      drawText(page, decile != null ? `${decile} / 10` : "N/A", pipX, y - 12, { font: bold, size: 14, color: decileColour(decile) });
+      drawText(page, decileLabel(decile), pipX, y - 27, { font: italic, size: 8, color: MUTED });
+      for (let pip = 1; pip <= 10; pip++) {
+        rect(page, pipX + (pip - 1) * 11, y - 44, 9, 8, pip <= (decile ?? 0) ? decileColour(decile) : LIGHT);
+      }
+
+      y -= 74;
+    }
+
+    y -= 8;
+    drawText(page, "Decile 1 = most disadvantaged 10% of SA2 areas nationally.  Decile 10 = most advantaged 10%.", ML, y, { font: italic, size: 7.5, color: MUTED });
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // PAGE 8 — Section 6: Language & Cultural Diversity
+  // ══════════════════════════════════════════════════════════════
+  {
+    const { page, y: startY } = await newPage(doc, bold, regular, label, 8, TOTAL_PAGES);
+    let y = startY;
+
+    y = sectionHeading(page, y, "Section 6 — Language & Cultural Diversity", "ABS Census 2021 · SA2 Level", bold, regular);
+
+    const langRows: [string, string, string][] = [
+      ["Speaks English Only",     pct(d.speaksEnglishOnly),  "of population at home"],
+      ["Born Overseas",           pct(d.bornOverseas),        "of total population"],
+      ["Indigenous Population",   pct(d.indigenousPopulation),"Aboriginal & Torres Strait Islander"],
+    ];
+
+    let zebra = false;
+    for (const [lbl, val, note] of langRows) {
+      y = kvRow(page, y, lbl, val, note, regular, bold, zebra);
+      zebra = !zebra;
+    }
+
+    y -= 12;
+
+    if (d.topLanguages && d.topLanguages.length > 0) {
+      hr(page, y);
+      y -= 20;
+      drawText(page, "Top Languages Spoken at Home", ML, y, { font: bold, size: 10, color: DARK });
+      y -= 18;
+      const langBands: [string, number | null][] = d.topLanguages.slice(0, 8).map(l => [l.language, l.pct]);
+      y = barChart(page, y, langBands, regular, bold, rgb(0.45, 0.31, 0.78));
+    } else {
+      hr(page, y);
+      y -= 20;
+      drawText(page, "Top Languages Spoken at Home", ML, y, { font: bold, size: 10, color: DARK });
+      y -= 18;
+      rect(page, ML, y - 24, CW, 32, LIGHT2);
+      drawText(page, "Language diversity breakdown (G13 — Language Spoken at Home) was not available in the short-header Census DataPack for this area. Full language data is available via ABS TableBuilder.", ML + 10, y - 14, { font: italic, size: 8.5, color: MUTED, maxWidth: CW - 18 });
+      y -= 44;
+    }
+
+    y -= 12;
+    hr(page, y);
+    y -= 20;
+
+    drawText(page, "Cultural Planning Considerations", ML, y, { font: bold, size: 10, color: DARK });
+    y -= 18;
+
+    const langPoints = [
+      d.speaksEnglishOnly != null && d.speaksEnglishOnly < 0.60
+        ? `${pct(1 - (d.speaksEnglishOnly ?? 0))} of residents speak a language other than English at home — bilingual services and multilingual signage should be considered.`
+        : `${pct(d.speaksEnglishOnly)} English-only rate indicates a predominantly English-speaking community — standard service delivery is appropriate.`,
+      d.bornOverseas != null && d.bornOverseas > 0.25
+        ? `High overseas-born population (${pct(d.bornOverseas)}) suggests diverse cultural traditions and potential demand for culturally specific services, food retail, and community facilities.`
+        : `Overseas-born population of ${pct(d.bornOverseas)} is within typical range for Australian suburbs.`,
+      d.indigenousPopulation != null && d.indigenousPopulation > 0.02
+        ? `Aboriginal and Torres Strait Islander population (${pct(d.indigenousPopulation)}) — culturally appropriate engagement, consultation, and heritage assessment obligations apply.`
+        : `Indigenous population proportion is below 2% — standard consultation processes apply, though cultural heritage obligations remain.`,
+    ];
+
+    for (const pt of langPoints) {
+      rect(page, ML, y - 2, 5, 5, rgb(0.45, 0.31, 0.78));
+      drawText(page, pt, ML + 12, y, { font: regular, size: 9, color: DARK, maxWidth: CW - 12 });
+      y -= 28;
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // PAGE 9 — Section 7: Comparison Snapshot
+  // ══════════════════════════════════════════════════════════════
+  {
+    const { page, y: startY } = await newPage(doc, bold, regular, label, 9, TOTAL_PAGES);
+    let y = startY;
+
+    y = sectionHeading(page, y, "Section 7 — Suburb Comparison Snapshot", "National benchmarks · ABS Census 2021", bold, regular);
+
+    drawText(page, `How ${suburb} compares to national averages across key indicators`, ML, y, { font: italic, size: 9, color: MUTED });
+    y -= 24;
+
+    // Comparison table
+    const nationals = [
+      { label: "Median Age",           suburb: d.medianAge,               nat: 38,    unit: " yrs", fmt2: (v: number) => `${v} yrs` },
+      { label: "Median HH Income",     suburb: d.medianHouseholdIncome,   nat: 1746,  unit: "/wk",  fmt2: (v: number) => `$${v}/wk` },
+      { label: "Median Personal Inc.", suburb: d.medianPersonalIncome,    nat: 805,   unit: "/wk",  fmt2: (v: number) => `$${v}/wk` },
+      { label: "Median Weekly Rent",   suburb: h.medianRentWeekly,        nat: 400,   unit: "/wk",  fmt2: (v: number) => `$${v}/wk` },
+      { label: "Monthly Mortgage",     suburb: h.medianMortgageMonthly,   nat: 1900,  unit: "/mo",  fmt2: (v: number) => `$${v}/mo` },
+      { label: "IRSD Score",           suburb: s.irsd,                    nat: 1000,  unit: "",     fmt2: (v: number) => `${v}` },
+      { label: "IRSAD Score",          suburb: s.irsad,                   nat: 1000,  unit: "",     fmt2: (v: number) => `${v}` },
+    ];
+
+    // Header row
+    rect(page, ML, y, CW, 16, BRAND);
+    drawText(page, "Indicator", ML + 6, y + 4, { font: bold, size: 8.5, color: WHITE });
+    drawText(page, `${suburb}`, ML + 170, y + 4, { font: bold, size: 8.5, color: WHITE });
+    drawText(page, "National Avg", ML + 270, y + 4, { font: bold, size: 8.5, color: WHITE });
+    drawText(page, "vs National", ML + 370, y + 4, { font: bold, size: 8.5, color: WHITE });
+    y -= 16;
+
+    let zebra = false;
+    for (const row of nationals) {
+      if (zebra) rect(page, ML, y, CW, 16, LIGHT2);
+      drawText(page, row.label, ML + 6, y + 4, { font: regular, size: 8.5, color: DARK });
+
+      const sv = row.suburb;
+      const nv = row.nat;
+      drawText(page, sv != null ? `${row.fmt2(sv)}` : "N/A", ML + 170, y + 4, { font: bold, size: 8.5, color: DARK });
+      drawText(page, row.fmt2(nv), ML + 270, y + 4, { font: regular, size: 8.5, color: MUTED });
+
+      if (sv != null) {
+        const diff = sv - nv;
+        const diffPct = ((diff / nv) * 100).toFixed(1);
+        const positive = diff >= 0;
+        const col = label === "IRSD Score" || label === "IRSAD Score"
+          ? (positive ? SUCCESS : DANGER)
+          : (positive ? SUCCESS : DANGER);
+        drawText(page, `${positive ? "+" : ""}${diffPct}%`, ML + 370, y + 4, { font: bold, size: 8.5, color: col });
+      } else {
+        drawText(page, "N/A", ML + 370, y + 4, { font: regular, size: 8.5, color: MUTED });
+      }
+
+      y -= 18;
+      zebra = !zebra;
+    }
+
+    y -= 10;
+    drawText(page, "National averages sourced from ABS 2021 Census national SA2 median values.", ML, y, { font: italic, size: 7.5, color: MUTED });
+    y -= 20;
+    hr(page, y);
+    y -= 20;
+
+    // Overall rating
+    drawText(page, "Overall Suburb Rating", ML, y, { font: bold, size: 11, color: DARK });
+    y -= 18;
+
+    const score2 = [
+      s.irsdDecile ?? 5,
+      s.irsadDecile ?? 5,
+      d.medianHouseholdIncome ? Math.min(10, Math.round(d.medianHouseholdIncome / 350)) : 5,
+      h.medianRentWeekly ? Math.max(1, 10 - Math.round(h.medianRentWeekly / 120)) : 5,
+    ];
+    const avg = score2.reduce((a, b) => a + b, 0) / score2.length;
+    const stars = Math.round(avg / 2);
+
+    rect(page, ML, y - 34, CW, 44, LIGHT2);
+    rect(page, ML, y - 34, 4, 44, decileColour(Math.round(avg)));
+    drawText(page, `Composite Score: ${avg.toFixed(1)} / 10`, ML + 10, y, { font: bold, size: 12, color: DARK });
+    const starStr = "★".repeat(stars) + "☆".repeat(5 - stars);
+    drawText(page, starStr, ML + 10, y - 16, { font: bold, size: 16, color: ACCENT });
+    drawText(page, "Based on SEIFA indices, income, and housing affordability metrics.", ML + 10, y - 28, { font: italic, size: 8, color: MUTED, maxWidth: CW - 20 });
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // PAGE 10 — Data Sources & Methodology
+  // ══════════════════════════════════════════════════════════════
+  {
+    const { page, y: startY } = await newPage(doc, bold, regular, label, 10, TOTAL_PAGES);
+    let y = startY;
+
+    drawText(page, "Data Sources & Methodology", ML, y, { font: bold, size: 16, color: DARK });
+    y -= 6;
+    hr(page, y, BRAND);
+    y -= 20;
+
+    drawText(page, "Primary Data Sources", ML, y, { font: bold, size: 11, color: DARK });
+    y -= 16;
+
+    const sources: [string, string, string][] = [
+      [
+        "ABS Census 2021 — General Community Profile (GCP)",
+        "Australian Bureau of Statistics · abs.gov.au",
+        "Provides population, age, income, housing tenure, and language diversity at SA2 level. Short-header DataPack used (Tables G01, G04, G09, G17, G33, G36).",
+      ],
+      [
+        "ABS SEIFA 2021 — Socio-Economic Indexes for Areas",
+        "Australian Bureau of Statistics · abs.gov.au",
+        "Four composite indices (IRSD, IRSAD, IER, IEO) computed from 2021 Census data. SA2-level scores and decile rankings relative to all SA2 areas nationally.",
+      ],
+      [
+        "ASGS Edition 3 — Australian Statistical Geography Standard",
+        "Australian Bureau of Statistics · abs.gov.au",
+        "SA2 to Postcode concordance via Mesh Block allocation files (MB_2021_AUST.xlsx, POA_2021_AUST.xlsx).",
+      ],
+    ];
+
+    for (const [title, source, desc] of sources) {
+      rect(page, ML, y - 44, CW, 54, LIGHT2);
+      rect(page, ML, y - 44, 4, 54, BRAND);
+      drawText(page, title, ML + 10, y + 2, { font: bold, size: 9.5, color: DARK, maxWidth: CW - 18 });
+      drawText(page, source, ML + 10, y - 11, { font: boldObl, size: 8, color: BRAND });
+      drawText(page, desc, ML + 10, y - 24, { font: regular, size: 8, color: MUTED, maxWidth: CW - 18 });
+      y -= 62;
+    }
+
+    y -= 6;
+    hr(page, y);
+    y -= 18;
+
+    drawText(page, "Methodology", ML, y, { font: bold, size: 11, color: DARK });
+    y -= 16;
+
+    const methodPoints = [
+      "All data is sourced from official ABS publications. No data has been adjusted, interpolated, or modelled.",
+      "SA2 (Statistical Area Level 2) is the primary geography for all indicators. SA2 areas correspond approximately to suburb boundaries.",
+      "Where a suburb spans multiple SA2 areas, the SA2 with the matching postcode is selected. All SA2 areas matching the search are returned via the API.",
+      "Percentage values (e.g. age bands, tenure type) are expressed as proportions of the relevant population denominator.",
+      "Housing price data (medianHousePrice) is not available in the standard Census DataPack — it requires CoreLogic or Domain integration and is shown as N/A where not available.",
+      "Language diversity data requires the G13 (Language Spoken at Home) Census table which is not included in the short-header GCP DataPack. Full data is available in ABS TableBuilder.",
+    ];
+
+    for (const pt of methodPoints) {
+      rect(page, ML + 2, y + 2, 4, 4, MUTED);
+      drawText(page, pt, ML + 12, y, { font: regular, size: 8.5, color: DARK, maxWidth: CW - 12 });
+      y -= 22;
+    }
+
+    y -= 8;
+    hr(page, y);
+    y -= 16;
+
+    drawText(page, "Disclaimer", ML, y, { font: bold, size: 9, color: MUTED });
+    y -= 14;
+    drawText(page, "This report is generated automatically from publicly available ABS data. DemoReport makes no representations as to the accuracy, completeness, or suitability of this information for any particular purpose. This report does not constitute financial, investment, planning, or legal advice. Users should seek independent professional advice before making decisions based on this information. Data reflects the 2021 Census period and may not reflect current conditions.", ML, y, { font: italic, size: 7.5, color: MUTED, maxWidth: CW });
+
+    y -= 60;
+    rect(page, ML, y - 14, CW, 24, BRAND);
+    drawText(page, "Thank you for using DemoReport · demoreport.com.au", ML + 10, y - 5, { font: bold, size: 10, color: WHITE });
   }
 
   const pdfBytes = await doc.save();
