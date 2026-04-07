@@ -760,7 +760,7 @@ export async function generateFeasibilityReport(data: ReportData): Promise<Gener
     rect(page, ML, y - 34, CW, 44, LIGHT2);
     rect(page, ML, y - 34, 4, 44, decileColour(Math.round(avg)));
     drawText(page, `Composite Score: ${avg.toFixed(1)} / 10`, ML + 10, y, { font: bold, size: 12, color: DARK });
-    const starStr = "★".repeat(stars) + "☆".repeat(5 - stars);
+    const starStr = "*".repeat(stars) + "-".repeat(5 - stars);
     drawText(page, starStr, ML + 10, y - 16, { font: bold, size: 16, color: ACCENT });
     drawText(page, "Based on SEIFA indices, income, and housing affordability metrics.", ML + 10, y - 28, { font: italic, size: 8, color: MUTED, maxWidth: CW - 20 });
   }
