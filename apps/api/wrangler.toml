@@ -18,8 +18,8 @@ binding = "CACHE"
 id = "a01d0b94f04444408b4a2b4308ceca56"
 
 [vars]
-DEMOREPORT_URL = "https://demoreport-40p.pages.dev"
-GRANTDATA_URL = "https://grantdata.pages.dev"
+DEMOREPORT_URL = "https://demoreport.workswell.com.au"
+GRANTDATA_URL = "https://grantdata.workswell.com.au"
 # Secrets are set via `wrangler secret put`:
 #   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, JWT_SECRET
 #   STRIPE_PRICE_STARTER, STRIPE_PRICE_PROFESSIONAL, STRIPE_PRICE_TEAM

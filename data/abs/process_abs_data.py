@@ -322,7 +322,7 @@ def process_g01(states: list[str]) -> pd.DataFrame:
     out["indigenous_count"]  = to_int(df[ind_col]) if ind_col else None
     out["born_overseas"]     = to_int(df[bos_col]) if bos_col else None
 
-    out = out[out["sa2_code"].str.match(r"^[12]\d{8}$")].reset_index(drop=True)
+    out = out[out["sa2_code"].str.match(r"^\d{9}$")].reset_index(drop=True)
     print(f"  ✓ {len(out)} SA2 rows from G01")
     return out
 
@@ -359,7 +359,7 @@ def process_g02(states: list[str]) -> pd.DataFrame:
     out["median_rent_weekly"]     = to_int(df[med_rent]) if med_rent else None
     out["median_mortgage_monthly"]= to_int(df[med_mort]) if med_mort else None
 
-    out = out[out["sa2_code"].str.match(r"^[12]\d{8}$")].reset_index(drop=True)
+    out = out[out["sa2_code"].str.match(r"^\d{9}$")].reset_index(drop=True)
     print(f"  ✓ {len(out)} SA2 rows from G02")
     return out
 
@@ -435,7 +435,7 @@ def process_g04(states: list[str]) -> pd.DataFrame:
     pct_cols = [c for c in final.columns if c.endswith("_pct")]
     final[pct_cols] = final[pct_cols].round(4)
 
-    final = final[final["sa2_code"].str.match(r"^[12]\d{8}$")].reset_index(drop=True)
+    final = final[final["sa2_code"].str.match(r"^\d{9}$")].reset_index(drop=True)
     print(f"  ✓ {len(final)} SA2 rows from G04")
     return final
 
@@ -496,7 +496,7 @@ def process_g33(states: list[str]) -> pd.DataFrame:
     out["renting_pct"]       = safe_pct(rented_private, total_dw).round(4)
     out["social_housing_pct"]= safe_pct(rented_social, total_dw).round(4)
 
-    out = out[out["sa2_code"].str.match(r"^[12]\d{8}$")].reset_index(drop=True)
+    out = out[out["sa2_code"].str.match(r"^\d{9}$")].reset_index(drop=True)
     print(f"  ✓ {len(out)} SA2 rows from G33")
     return out
 
@@ -523,7 +523,7 @@ def process_g51(states: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
         return pd.DataFrame(), pd.DataFrame()
     df = pd.concat(frames, ignore_index=True)
 
-    df = df[df["sa2_code"].str.match(r"^[12]\d{8}$", na=False)].copy()
+    df = df[df["sa2_code"].str.match(r"^\d{9}$", na=False)].copy()
     df["sa2_code"] = df["sa2_code"].str.zfill(9)
 
     # English-only column
