@@ -1,52 +1,87 @@
-const PLANS = [
+"use client";
+
+import { useRouter, useSearchParams } from "next/navigation";
+import { useState, Suspense } from "react";
+import { createCheckoutSession, type ReportPlan } from "@/lib/api";
+
+const PLANS: {
+  name: string; plan: ReportPlan; price: number; pages: number;
+  description: string; features: string[]; cta: string; featured: boolean;
+}[] = [
   {
     name: "Single Report",
+    plan: "single",
     price: 99,
+    pages: 10,
     description: "One-off report for a single suburb or postcode.",
     features: [
       "All 7 data sections",
       "10-page professionally formatted PDF",
       "ABS source citations",
       "Instant download after payment",
-      "NSW & VIC coverage",
+      "National coverage (all states & territories)",
     ],
     cta: "Buy Single Report",
-    href: "#",
     featured: false,
   },
   {
     name: "Professional",
+    plan: "professional",
     price: 199,
+    pages: 11,
     description: "Compare your target suburb with up to 2 neighbouring areas.",
     features: [
       "Everything in Single",
-      "Neighbouring suburb comparison",
-      "Comparative charts included",
-      "Side-by-side SEIFA analysis",
+      "Side-by-side neighbour comparison page",
+      "13 indicators compared across suburbs",
+      "Side-by-side SEIFA decile analysis",
       "1 week unlimited re-downloads",
     ],
     cta: "Buy Professional",
-    href: "#",
     featured: true,
   },
   {
     name: "Enterprise",
+    plan: "enterprise",
     price: 299,
+    pages: 12,
     description: "Full analysis package with AI-generated narrative commentary.",
     features: [
       "Everything in Professional",
       "Up to 4 suburb comparison",
-      "AI-generated executive narrative",
-      "Risk & opportunity summary",
+      "AI-generated 5-section executive narrative",
+      "Risk & opportunity flag summary",
       "Priority email support",
     ],
     cta: "Buy Enterprise",
-    href: "#",
     featured: false,
   },
 ];
 
-export function Pricing() {
+function PricingInner({ suburb, sa2Code }: { suburb?: string; sa2Code?: string }) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const [loading, setLoading] = useState<ReportPlan | null>(null);
+
+  const activeSuburb = suburb ?? searchParams.get("suburb") ?? "";
+  const activeSa2    = sa2Code ?? searchParams.get("sa2Code") ?? "";
+
+  async function handleBuy(plan: ReportPlan) {
+    if (!activeSuburb) {
+      // No suburb context — send to search first
+      router.push(`/report?plan=${plan}`);
+      return;
+    }
+    setLoading(plan);
+    const url = await createCheckoutSession(activeSuburb, activeSa2, plan);
+    if (url) {
+      window.location.href = url;
+    } else {
+      setLoading(null);
+      alert("Could not start checkout. Please try again.");
+    }
+  }
+
   return (
     <section id="pricing" className="py-20 bg-white">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -58,6 +93,11 @@ export function Pricing() {
           <p className="text-gray-500 mt-4 max-w-xl mx-auto">
             No subscription. No login required. Reports are generated on demand
             from the latest ABS data.
+            {activeSuburb && (
+              <span className="block mt-2 text-brand-600 font-medium">
+                Report for: {activeSuburb}
+              </span>
+            )}
           </p>
         </div>
 
@@ -79,9 +119,14 @@ export function Pricing() {
               )}
 
               <div>
-                <h3 className={["font-bold text-lg", plan.featured ? "text-white" : "text-gray-900"].join(" ")}>
-                  {plan.name}
-                </h3>
+                <div className="flex items-center justify-between mb-1">
+                  <h3 className={["font-bold text-lg", plan.featured ? "text-white" : "text-gray-900"].join(" ")}>
+                    {plan.name}
+                  </h3>
+                  <span className={["text-xs font-medium px-2 py-0.5 rounded-full", plan.featured ? "bg-white/20 text-white" : "bg-gray-100 text-gray-500"].join(" ")}>
+                    {plan.pages} pages
+                  </span>
+                </div>
                 <p className={["text-sm mt-1 mb-6", plan.featured ? "text-blue-100" : "text-gray-500"].join(" ")}>
                   {plan.description}
                 </p>
@@ -99,9 +144,7 @@ export function Pricing() {
                   <li key={feature} className="flex items-start gap-2 text-sm">
                     <svg
                       className={["w-4 h-4 mt-0.5 flex-shrink-0", plan.featured ? "text-blue-200" : "text-brand-500"].join(" ")}
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
+                      fill="none" stroke="currentColor" viewBox="0 0 24 24"
                     >
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
                     </svg>
@@ -110,25 +153,34 @@ export function Pricing() {
                 ))}
               </ul>
 
-              <a
-                href={plan.href}
+              <button
+                onClick={() => handleBuy(plan.plan)}
+                disabled={loading !== null}
                 className={[
-                  "block text-center px-5 py-3 rounded-xl font-semibold text-sm transition-colors",
+                  "block w-full text-center px-5 py-3 rounded-xl font-semibold text-sm transition-colors disabled:opacity-60",
                   plan.featured
                     ? "bg-white text-brand-700 hover:bg-blue-50"
                     : "bg-brand-600 text-white hover:bg-brand-700",
                 ].join(" ")}
               >
-                {plan.cta}
-              </a>
+                {loading === plan.plan ? "Redirecting to Stripe…" : plan.cta}
+              </button>
             </div>
           ))}
         </div>
 
         <p className="text-center text-xs text-gray-400 mt-8">
-          Prices in AUD incl. GST. Secure payment via Stripe. Instant PDF download.
+          Prices in AUD. Secure payment via Stripe. Instant PDF download.
         </p>
       </div>
     </section>
+  );
+}
+
+export function Pricing({ suburb, sa2Code }: { suburb?: string; sa2Code?: string }) {
+  return (
+    <Suspense fallback={<div className="py-20" />}>
+      <PricingInner suburb={suburb} sa2Code={sa2Code} />
+    </Suspense>
   );
 }

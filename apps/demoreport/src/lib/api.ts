@@ -29,15 +29,18 @@ export async function fetchPostcode(postcode: string): Promise<SuburbResponse[] 
   return data?.data ?? null;
 }
 
+export type ReportPlan = "single" | "professional" | "enterprise";
+
 export async function createCheckoutSession(
   suburb: string,
   sa2Code: string,
+  plan: ReportPlan = "single",
 ): Promise<string | null> {
   try {
     const res = await fetch(`${API_URL}/api/stripe/create-checkout`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ suburb, sa2Code }),
+      body: JSON.stringify({ suburb, sa2Code, plan }),
     });
     if (!res.ok) return null;
     const json = (await res.json()) as { url?: string };

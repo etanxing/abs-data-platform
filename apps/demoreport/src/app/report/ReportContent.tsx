@@ -4,7 +4,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { fetchSuburb, fetchPostcode, createCheckoutSession } from "@/lib/api";
+import { fetchSuburb, fetchPostcode, createCheckoutSession, type ReportPlan } from "@/lib/api";
 import type { SuburbResponse } from "@/lib/types";
 import { DataCard } from "@/components/report/DataCard";
 import { LockedSection } from "@/components/report/LockedSection";
@@ -46,7 +46,8 @@ export default function ReportContent() {
   const [selected, setSelected] = useState<SuburbResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [checkoutLoading, setCheckoutLoading] = useState<ReportPlan | null>(null);
+  const [selectedPlan, setSelectedPlan] = useState<ReportPlan>("single");
 
   useEffect(() => {
     if (!query) {
@@ -66,15 +67,15 @@ export default function ReportContent() {
     }).finally(() => setLoading(false));
   }, [suburb, postcode, query]);
 
-  async function handleUnlock() {
+  async function handleUnlock(plan: ReportPlan = selectedPlan) {
     if (!selected) return;
-    setCheckoutLoading(true);
-    const url = await createCheckoutSession(selected.suburb, selected.sa2Code);
+    setCheckoutLoading(plan);
+    const url = await createCheckoutSession(selected.suburb, selected.sa2Code, plan);
     if (url) {
       window.location.href = url;
     } else {
       alert("Could not start checkout. Please try again.");
-      setCheckoutLoading(false);
+      setCheckoutLoading(null);
     }
   }
 
@@ -202,7 +203,7 @@ export default function ReportContent() {
           <LockedSection
             title="Housing Tenure Breakdown"
             onUnlock={handleUnlock}
-            loading={checkoutLoading}
+            loading={checkoutLoading !== null}
           >
             <HousingChart housing={d.housing} />
             <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
@@ -217,7 +218,7 @@ export default function ReportContent() {
           <LockedSection
             title="SEIFA Analysis — All 4 Indices"
             onUnlock={handleUnlock}
-            loading={checkoutLoading}
+            loading={checkoutLoading !== null}
           >
             <div className="grid grid-cols-2 gap-4">
               {[
@@ -239,7 +240,7 @@ export default function ReportContent() {
           <LockedSection
             title="Language & Cultural Diversity"
             onUnlock={handleUnlock}
-            loading={checkoutLoading}
+            loading={checkoutLoading !== null}
           >
             <div className="space-y-2">
               {d.demographics.topLanguages.slice(0, 5).map((l) => (
@@ -254,21 +255,48 @@ export default function ReportContent() {
             </div>
           </LockedSection>
 
-          {/* Unlock CTA */}
-          <div className="bg-brand-600 rounded-2xl p-6 text-center text-white">
-            <h3 className="font-bold text-lg mb-2">Unlock the Full PDF Report</h3>
-            <p className="text-blue-100 text-sm mb-5 max-w-md mx-auto">
-              10-page professionally formatted report with all data sections,
-              state comparisons, and ABS source citations. One-time payment.
+          {/* Unlock CTA — 3-plan selector */}
+          <div className="bg-brand-600 rounded-2xl p-6 text-white">
+            <h3 className="font-bold text-lg mb-1 text-center">Get the Full PDF Report</h3>
+            <p className="text-blue-100 text-sm mb-5 text-center max-w-md mx-auto">
+              Professionally formatted PDF with all 7 data sections, ABS source citations,
+              and instant download. One-time payment — no subscription.
             </p>
+
+            {/* Plan picker */}
+            <div className="grid grid-cols-3 gap-3 mb-5">
+              {([
+                { plan: "single"       as ReportPlan, label: "Single",       price: 99,  pages: 10, sub: "1 suburb" },
+                { plan: "professional" as ReportPlan, label: "Professional", price: 199, pages: 11, sub: "1 + 2 neighbours" },
+                { plan: "enterprise"   as ReportPlan, label: "Enterprise",   price: 299, pages: 12, sub: "4-way comparison" },
+              ]).map(({ plan, label, price, pages, sub }) => (
+                <button
+                  key={plan}
+                  onClick={() => setSelectedPlan(plan)}
+                  className={[
+                    "rounded-xl p-3 text-left border-2 transition-all",
+                    selectedPlan === plan
+                      ? "border-white bg-white/20"
+                      : "border-white/30 bg-white/10 hover:bg-white/15",
+                  ].join(" ")}
+                >
+                  <div className="font-bold text-sm">{label}</div>
+                  <div className="text-2xl font-bold">${price}</div>
+                  <div className="text-xs text-blue-200">{pages} pages · {sub}</div>
+                </button>
+              ))}
+            </div>
+
             <button
-              onClick={handleUnlock}
-              disabled={checkoutLoading}
-              className="px-8 py-3 bg-white text-brand-700 font-bold rounded-xl hover:bg-blue-50 disabled:opacity-50 transition-colors shadow-lg"
+              onClick={() => handleUnlock(selectedPlan)}
+              disabled={checkoutLoading !== null}
+              className="w-full px-8 py-3 bg-white text-brand-700 font-bold rounded-xl hover:bg-blue-50 disabled:opacity-50 transition-colors shadow-lg text-sm"
             >
-              {checkoutLoading ? "Redirecting to Stripe…" : "Get Full Report — $99"}
+              {checkoutLoading !== null
+                ? "Redirecting to Stripe…"
+                : `Get ${selectedPlan === "single" ? "Single" : selectedPlan === "professional" ? "Professional" : "Enterprise"} Report — $${selectedPlan === "single" ? 99 : selectedPlan === "professional" ? 199 : 299}`}
             </button>
-            <p className="text-xs text-blue-200 mt-3">Secure payment via Stripe · Instant PDF download</p>
+            <p className="text-xs text-blue-200 mt-3 text-center">Secure payment via Stripe · Instant PDF download</p>
           </div>
         </div>
       </div>
