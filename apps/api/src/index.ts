@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { querySuburbs } from "./db";
-import { getStripe, createReportCheckout, verifyWebhook } from "./stripe";
+import { getStripe, createReportCheckout, verifyWebhook, type ReportPlan, PLAN_PRICES } from "./stripe";
 import {
   hashPassword,
   verifyPassword,
@@ -373,23 +373,23 @@ app.get("/api/subscription/status", requireAuth, async (c) => {
 // ──────────────────────────────────────────────────────────────
 
 app.post("/api/stripe/create-checkout", async (c) => {
-  interface CheckoutBody { suburb?: string; sa2Code?: string }
+  interface CheckoutBody { suburb?: string; sa2Code?: string; plan?: string }
   const body: CheckoutBody = await c.req.json<CheckoutBody>().catch(() => ({}));
-  const { suburb, sa2Code } = body;
+  const { suburb, sa2Code, plan: planRaw } = body;
 
   if (!suburb) return c.json({ error: "suburb is required" }, 400);
+
+  const validPlans: ReportPlan[] = ["single", "professional", "enterprise"];
+  const plan: ReportPlan = validPlans.includes(planRaw as ReportPlan)
+    ? (planRaw as ReportPlan)
+    : "single";
 
   const stripe = getStripe(c.env);
   const demoreportUrl = c.env.DEMOREPORT_URL ?? "http://localhost:3001";
 
   try {
-    const session = await createReportCheckout(
-      stripe,
-      suburb,
-      sa2Code ?? "",
-      demoreportUrl,
-    );
-    return c.json({ url: session.url, sessionId: session.id });
+    const session = await createReportCheckout(stripe, suburb, sa2Code ?? "", demoreportUrl, plan);
+    return c.json({ url: session.url, sessionId: session.id, plan, priceCents: PLAN_PRICES[plan] });
   } catch (err) {
     console.error("Stripe create-checkout error:", err);
     return c.json({ error: "Failed to create checkout session" }, 500);
@@ -510,20 +510,22 @@ app.post("/api/stripe/webhook", async (c) => {
     const session = event.data.object as Stripe.Checkout.Session;
 
     if (session.mode === "payment") {
-      const suburb = session.metadata?.suburb ?? "";
+      const suburb  = session.metadata?.suburb ?? "";
       const sa2Code = session.metadata?.sa2Code ?? "";
+      const plan    = (session.metadata?.plan ?? "single") as ReportPlan;
       const reportId = crypto.randomUUID();
 
       await c.env.DB.prepare(
-        `INSERT OR IGNORE INTO reports (id, suburb, sa2_code, stripe_session_id, stripe_payment_intent, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'generating', unixepoch(), unixepoch())`,
+        `INSERT OR IGNORE INTO reports (id, suburb, sa2_code, stripe_session_id, stripe_payment_intent, status, report_type, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'generating', ?, unixepoch(), unixepoch())`,
       ).bind(
         reportId, suburb, sa2Code || null, session.id,
         typeof session.payment_intent === "string" ? session.payment_intent : null,
+        plan,
       ).run();
 
       c.executionCtx.waitUntil(
-        generateReportForSession(c.env, reportId, suburb, sa2Code),
+        generateReportForSession(c.env, reportId, suburb, sa2Code, plan),
       );
     }
 
@@ -591,18 +593,47 @@ async function generateReportForSession(
   reportId: string,
   suburb: string,
   sa2Code: string,
+  plan: ReportPlan = "single",
 ): Promise<void> {
   try {
+    // Fetch primary suburb data
     const results = await querySuburbs(env.DB, suburb, false);
     const target = results.find((r) => !sa2Code || r.sa2Code === sa2Code) ?? results[0];
-
     if (!target) throw new Error(`No suburb data found for "${suburb}"`);
 
-    const { generateFeasibilityReport } = await import("@abs/pdf-generator");
-    const reportData = suburbResponseToReportData(target);
-    const { buffer, filename } = await generateFeasibilityReport(reportData);
+    const { generateFeasibilityReport, generateComparisonReport, generateEnterpriseReport } = await import("@abs/pdf-generator");
 
-    const r2Key = `reports/${target.sa2Code}/${filename}`;
+    let buffer: Uint8Array;
+    let filename: string;
+
+    if (plan === "professional") {
+      // Fetch up to 2 neighbouring SA2s (same state, adjacent codes)
+      const neighbours = await getNeighbouringSA2s(env.DB, target.sa2Code, target.state, 2);
+      const result = await generateComparisonReport(
+        suburbResponseToReportData(target),
+        neighbours.map(suburbResponseToReportData),
+      );
+      buffer = result.buffer;
+      filename = result.filename;
+
+    } else if (plan === "enterprise") {
+      // Fetch up to 3 additional SA2s for 4-way comparison
+      const neighbours = await getNeighbouringSA2s(env.DB, target.sa2Code, target.state, 3);
+      const result = await generateEnterpriseReport(
+        suburbResponseToReportData(target),
+        neighbours.map(suburbResponseToReportData),
+      );
+      buffer = result.buffer;
+      filename = result.filename;
+
+    } else {
+      // Single report (default)
+      const result = await generateFeasibilityReport(suburbResponseToReportData(target));
+      buffer = result.buffer;
+      filename = result.filename;
+    }
+
+    const r2Key = `reports/${target.sa2Code}/${plan}/${filename}`;
     await env.REPORTS.put(r2Key, buffer, {
       httpMetadata: { contentType: "application/pdf" },
     });
@@ -616,6 +647,32 @@ async function generateReportForSession(
     await env.DB.prepare(
       "UPDATE reports SET status = 'error', error_message = ?, updated_at = unixepoch() WHERE id = ?",
     ).bind(msg, reportId).run();
+  }
+}
+
+/** Return up to `limit` SA2s in the same state with adjacent SA2 codes. */
+async function getNeighbouringSA2s(
+  db: D1Database,
+  sa2Code: string,
+  state: string,
+  limit: number,
+): Promise<SuburbResponse[]> {
+  try {
+    const rows = await db.prepare(
+      `SELECT sa2_code FROM sa2_areas
+       WHERE state = ? AND sa2_code != ?
+       ORDER BY ABS(CAST(sa2_code AS INTEGER) - CAST(? AS INTEGER))
+       LIMIT ?`,
+    ).bind(state, sa2Code, sa2Code, limit).all<{ sa2_code: string }>();
+
+    const neighbours: SuburbResponse[] = [];
+    for (const row of rows.results) {
+      const results = await querySuburbs(db, row.sa2_code, false);
+      if (results[0]) neighbours.push(results[0]);
+    }
+    return neighbours;
+  } catch {
+    return [];
   }
 }
 

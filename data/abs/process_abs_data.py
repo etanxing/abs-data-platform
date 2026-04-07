@@ -6,8 +6,8 @@ Transform raw ABS downloads into clean CSVs ready for D1 import.
 Inputs  (data/abs/raw/):
   SEIFA_2021_SA2.xlsx                  — SEIFA scores
   CG_POSTCODE_2021_SA2_2021.csv        — postcode-to-SA2 mapping
-  census_NSW/  (extracted DataPack)    — Census 2021 GCP tables
-  census_VIC/  (extracted DataPack)
+  census_{STATE}/  (extracted DataPacks) — Census 2021 GCP tables
+                   NSW, VIC, QLD, SA, WA, TAS, NT, ACT
 
 Outputs (data/abs/processed/):
   sa2_areas.csv
@@ -200,9 +200,9 @@ def process_seifa() -> pd.DataFrame:
 
     out = out.merge(pop_df, on="sa2_code", how="left")
 
-    # Keep only NSW + VIC; drop non-numeric SA2 codes
-    out = out[out["sa2_code"].str.match(r"^[12]\d{8}$")].reset_index(drop=True)
-    print(f"  ✓ {len(out)} SA2 areas (NSW + VIC)")
+    # Drop non-numeric SA2 codes (totals rows etc.)
+    out = out[out["sa2_code"].str.match(r"^\d{9}$")].reset_index(drop=True)
+    print(f"  ✓ {len(out)} SA2 areas (all states)")
     return out
 
 
@@ -246,9 +246,9 @@ def process_postcode_sa2() -> pd.DataFrame:
     sa2_alloc = mb_df[[mb_col_mb, sa2_code_col]].copy()
     sa2_alloc.columns = ["mb_code", "sa2_code"]
     sa2_alloc["sa2_code"] = sa2_alloc["sa2_code"].astype(str).str.strip().str.zfill(9)
-    # Filter to NSW + VIC
-    sa2_alloc = sa2_alloc[sa2_alloc["sa2_code"].str.match(r"^[12]\d{8}$")]
-    print(f"  {len(sa2_alloc)} NSW+VIC mesh blocks with SA2")
+    # Keep all valid 9-digit SA2 codes (all states)
+    sa2_alloc = sa2_alloc[sa2_alloc["sa2_code"].str.match(r"^\d{9}$")]
+    print(f"  {len(sa2_alloc)} national mesh blocks with SA2")
 
     # Load POA allocation: MB_CODE → POA_CODE (= postcode)
     print("  Loading POA allocation (18 MB, may take ~20s) …")
@@ -601,7 +601,7 @@ def process_g51(states: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 def main() -> None:
     print("ABS Data Processor\n" + "=" * 50)
-    states = ["NSW", "VIC"]
+    states = ["NSW", "VIC", "QLD", "SA", "WA", "TAS", "NT", "ACT"]
 
     # ── SEIFA
     seifa = process_seifa()
@@ -622,7 +622,7 @@ def main() -> None:
 
     # ── Postcode → SA2
     pc_sa2 = process_postcode_sa2()
-    # Join to filter only NSW/VIC SA2s that exist in our sa2 table
+    # Join to filter only SA2s that exist in our sa2 table
     valid_sa2s = set(sa2["sa2_code"])
     pc_sa2 = pc_sa2[pc_sa2["sa2_code"].isin(valid_sa2s)]
     pc_sa2.to_csv(PROCESSED_DIR / "postcode_sa2_mapping.csv", index=False)

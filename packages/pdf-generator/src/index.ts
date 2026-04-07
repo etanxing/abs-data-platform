@@ -856,7 +856,270 @@ export async function generateFeasibilityReport(data: ReportData): Promise<Gener
 }
 
 /**
- * Stub — Phase 3 will implement a multi-suburb comparison report.
+ * Professional ($199) — Single report + comparison section with up to 2 neighbours.
+ * Appends a multi-suburb side-by-side comparison after the standard 10 pages.
+ */
+export async function generateComparisonReport(
+  primary: ReportData,
+  neighbours: ReportData[],
+): Promise<GeneratedReport> {
+  // Generate the base 10-page report for the primary suburb
+  const base = await generateFeasibilityReport(primary);
+
+  // Load and append a comparison section
+  const basePdf  = await PDFDocument.load(base.buffer);
+  const compDoc  = await PDFDocument.create();
+  const bold     = await compDoc.embedFont(StandardFonts.HelveticaBold);
+  const regular  = await compDoc.embedFont(StandardFonts.Helvetica);
+  const italic   = await compDoc.embedFont(StandardFonts.HelveticaOblique);
+
+  const allSuburbs = [primary, ...neighbours.slice(0, 2)];
+  const label = `${primary.suburb}, ${primary.state}`;
+
+  // Comparison page
+  const page = compDoc.addPage([PW, PH]);
+
+  // Header
+  rect(page, 0, PH - 30, PW, 30, BRAND);
+  drawText(page, "DemoReport Professional", ML, PH - 20, { font: bold, size: 10, color: WHITE });
+  drawText(page, "Neighbourhood Comparison", PW - MR - 180, PH - 20, { font: regular, size: 8.5, color: rgb(0.75, 0.88, 0.97) });
+
+  let y = PH - 60;
+  drawText(page, "Suburb Comparison", ML, y, { font: bold, size: 16, color: DARK });
+  y -= 6;
+  page.drawLine({ start: { x: ML, y }, end: { x: PW - MR, y }, thickness: 1, color: BRAND });
+  y -= 20;
+  drawText(page, `${primary.suburb} vs ${neighbours.map(n => n.suburb).join(" vs ")}`, ML, y, { font: italic, size: 9, color: MUTED });
+  y -= 24;
+
+  // Column headers
+  const colW = CW / allSuburbs.length;
+  rect(page, ML, y, CW, 18, BRAND);
+  drawText(page, "Indicator", ML + 4, y + 5, { font: bold, size: 8, color: WHITE });
+  for (let i = 0; i < allSuburbs.length; i++) {
+    drawText(page, allSuburbs[i].suburb, ML + 100 + i * ((CW - 100) / allSuburbs.length), y + 5, { font: bold, size: 8, color: WHITE, maxWidth: (CW - 100) / allSuburbs.length - 4 });
+  }
+  y -= 18;
+
+  // Comparison rows
+  const compW = (CW - 100) / allSuburbs.length;
+  const indicators: [string, (d: ReportData) => string][] = [
+    ["Population",       d => fmt(d.demographics.totalPopulation)],
+    ["Median Age",       d => fmt(d.demographics.medianAge, "", " yrs")],
+    ["HH Income/wk",     d => fmt(d.demographics.medianHouseholdIncome, "$")],
+    ["Personal Inc/wk",  d => fmt(d.demographics.medianPersonalIncome, "$")],
+    ["Weekly Rent",      d => fmt(d.housing.medianRentWeekly, "$")],
+    ["Monthly Mortgage", d => fmt(d.housing.medianMortgageMonthly, "$")],
+    ["Total Dwellings",  d => fmt(d.housing.totalDwellings)],
+    ["IRSD Score",       d => fmt(d.seifa.irsd)],
+    ["IRSD Decile",      d => d.seifa.irsdDecile != null ? `${d.seifa.irsdDecile}/10` : "N/A"],
+    ["IRSAD Score",      d => fmt(d.seifa.irsad)],
+    ["IRSAD Decile",     d => d.seifa.irsadDecile != null ? `${d.seifa.irsadDecile}/10` : "N/A"],
+    ["Born Overseas",    d => pct(d.demographics.bornOverseas)],
+    ["Indigenous %",     d => pct(d.demographics.indigenousPopulation)],
+  ];
+
+  let zebra2 = false;
+  for (const [indLabel, getter] of indicators) {
+    if (zebra2) rect(page, ML, y, CW, 16, LIGHT);
+    drawText(page, indLabel, ML + 4, y + 4, { font: regular, size: 8, color: MUTED });
+    for (let i = 0; i < allSuburbs.length; i++) {
+      const val = getter(allSuburbs[i]);
+      const col2 = i === 0 ? DARK : MUTED;
+      drawText(page, val, ML + 100 + i * compW + 4, y + 4, { font: i === 0 ? bold : regular, size: 8, color: col2 });
+    }
+    y -= 16;
+    zebra2 = !zebra2;
+  }
+
+  y -= 16;
+  rect(page, ML, y - 18, CW, 28, LIGHT);
+  rect(page, ML, y - 18, 4, 28, BRAND);
+  drawText(page, "Primary suburb shown in bold. Neighbours sourced from adjacent SA2 codes in the same state.", ML + 10, y - 8, { font: italic, size: 8, color: MUTED, maxWidth: CW - 18 });
+
+  // Footer
+  rect(page, 0, 0, PW, 22, LIGHT);
+  drawText(page, "DemoReport Professional · demoreport.com.au · ABS Census 2021 & SEIFA 2021", ML, 7, { font: regular, size: 6.5, color: MUTED });
+
+  // Copy comparison page into base PDF
+  const [compPage] = await basePdf.copyPages(compDoc, [0]);
+  basePdf.addPage(compPage);
+
+  const pdfBytes = await basePdf.save();
+  const slug = primary.suburb.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  return {
+    buffer: new Uint8Array(pdfBytes),
+    filename: `demoreport-professional-${slug}-${primary.state.toLowerCase()}-${primary.censusYear}.pdf`,
+  };
+}
+
+/**
+ * Enterprise ($299) — Up to 4 suburbs + AI-generated executive narrative section.
+ * Appends comparison page + narrative summary after the standard 10 pages.
+ */
+export async function generateEnterpriseReport(
+  primary: ReportData,
+  neighbours: ReportData[],
+): Promise<GeneratedReport> {
+  // Start with the Professional report (10 pages + comparison)
+  const profReport = await generateComparisonReport(primary, neighbours.slice(0, 3));
+  const basePdf    = await PDFDocument.load(profReport.buffer);
+  const narrativeDoc = await PDFDocument.create();
+  const bold    = await narrativeDoc.embedFont(StandardFonts.HelveticaBold);
+  const regular = await narrativeDoc.embedFont(StandardFonts.Helvetica);
+  const italic  = await narrativeDoc.embedFont(StandardFonts.HelveticaOblique);
+
+  const allSuburbs = [primary, ...neighbours.slice(0, 3)];
+
+  // Narrative page
+  const page = narrativeDoc.addPage([PW, PH]);
+
+  rect(page, 0, PH - 30, PW, 30, BRAND);
+  drawText(page, "DemoReport Enterprise", ML, PH - 20, { font: bold, size: 10, color: WHITE });
+  drawText(page, "AI Executive Narrative", PW - MR - 170, PH - 20, { font: regular, size: 8.5, color: rgb(0.75, 0.88, 0.97) });
+
+  let y = PH - 60;
+  drawText(page, "Executive Narrative & Risk Assessment", ML, y, { font: bold, size: 16, color: DARK });
+  y -= 6;
+  page.drawLine({ start: { x: ML, y }, end: { x: PW - MR, y }, thickness: 1, color: BRAND });
+  y -= 20;
+  drawText(page, `AI-generated analysis for ${primary.suburb} and ${neighbours.length} neighbouring suburb${neighbours.length !== 1 ? "s" : ""}`, ML, y, { font: italic, size: 9, color: MUTED });
+  y -= 24;
+
+  // Generate narrative text from the data
+  const narrative = buildNarrative(primary, neighbours.slice(0, 3));
+
+  for (const section of narrative) {
+    rect(page, ML, y, 4, 18, BRAND);
+    drawText(page, section.heading, ML + 12, y + 4, { font: bold, size: 11, color: DARK });
+    y -= 28;
+    drawText(page, section.body, ML, y, { font: regular, size: 9, color: DARK, maxWidth: CW });
+    // Rough line count estimate for spacing
+    const lines = Math.ceil(section.body.length / 95);
+    y -= lines * 13 + 16;
+    if (y < 80) break;
+  }
+
+  // Risk/opportunity summary table
+  if (y > 180) {
+    y -= 10;
+    page.drawLine({ start: { x: ML, y }, end: { x: PW - MR, y }, thickness: 0.75, color: LIGHT });
+    y -= 20;
+    drawText(page, "Risk & Opportunity Summary", ML, y, { font: bold, size: 11, color: DARK });
+    y -= 20;
+
+    const risks = buildRiskOpportunity(primary);
+    for (const [tag, colour, text] of risks) {
+      rect(page, ML, y - 2, 60, 14, colour);
+      drawText(page, tag, ML + 4, y, { font: bold, size: 7.5, color: WHITE });
+      drawText(page, text, ML + 68, y, { font: regular, size: 8.5, color: DARK, maxWidth: CW - 68 });
+      y -= 20;
+      if (y < 60) break;
+    }
+  }
+
+  // Footer
+  rect(page, 0, 0, PW, 22, LIGHT);
+  drawText(page, "DemoReport Enterprise · AI narrative generated from ABS Census 2021 data · demoreport.com.au", ML, 7, { font: italic, size: 6.5, color: MUTED });
+
+  const [narrativePage] = await basePdf.copyPages(narrativeDoc, [0]);
+  basePdf.addPage(narrativePage);
+
+  const pdfBytes = await basePdf.save();
+  const slug = primary.suburb.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  return {
+    buffer: new Uint8Array(pdfBytes),
+    filename: `demoreport-enterprise-${slug}-${primary.state.toLowerCase()}-${primary.censusYear}.pdf`,
+  };
+}
+
+/** Build narrative sections from raw data (no external AI call — rule-based). */
+function buildNarrative(primary: ReportData, neighbours: ReportData[]): { heading: string; body: string }[] {
+  const d = primary.demographics;
+  const h = primary.housing;
+  const s = primary.seifa;
+
+  const incomeVsNational = d.medianHouseholdIncome
+    ? d.medianHouseholdIncome > 1746 ? "above" : "below"
+    : "at";
+
+  const allSuburbs = [primary, ...neighbours];
+  const avgRent = allSuburbs.reduce((a, b) => a + (b.housing.medianRentWeekly ?? 0), 0) / allSuburbs.length;
+
+  return [
+    {
+      heading: "Market Overview",
+      body:
+        `${primary.suburb} (SA2 ${primary.sa2Code}) is a ${s.irsdDecile && s.irsdDecile >= 7 ? "higher-advantage" : s.irsdDecile && s.irsdDecile >= 4 ? "mid-tier" : "lower socio-economic"} suburb ` +
+        `in ${primary.state} with a population of ${fmt(d.totalPopulation)} (ABS 2021). ` +
+        `The median household income of ${fmt(d.medianHouseholdIncome, "$", "/wk")} sits ${incomeVsNational} the national average of $1,746/wk. ` +
+        `${d.medianAge ? `The median age of ${d.medianAge} years suggests a ${d.medianAge < 35 ? "younger, renter-skewed" : d.medianAge > 50 ? "mature, owner-occupier" : "balanced"} demographic profile.` : ""}`,
+    },
+    {
+      heading: "Housing Market Analysis",
+      body:
+        `Weekly median rent of ${fmt(h.medianRentWeekly, "$")} compares to a neighbourhood average of ${fmt(Math.round(avgRent), "$")} across the ${allSuburbs.length} suburbs analysed. ` +
+        `Monthly mortgage repayments of ${fmt(h.medianMortgageMonthly, "$")} represent approximately ` +
+        `${h.medianMortgageMonthly && d.medianHouseholdIncome ? Math.round((h.medianMortgageMonthly / (d.medianHouseholdIncome * 4.33)) * 100) : "N/A"}% ` +
+        `of median household income, indicating ${h.medianMortgageMonthly && d.medianHouseholdIncome && (h.medianMortgageMonthly / (d.medianHouseholdIncome * 4.33)) > 0.35 ? "moderate mortgage stress — consider affordability in product pricing" : "acceptable mortgage serviceability for owner-occupier product"}.`,
+    },
+    {
+      heading: "Socio-Economic Context (SEIFA 2021)",
+      body:
+        `IRSD decile ${s.irsdDecile ?? "N/A"}/10 places ${primary.suburb} in the ${decileLabel(s.irsdDecile)} bracket relative to all Australian SA2 areas. ` +
+        `IRSAD score of ${fmt(s.irsad)} (decile ${s.irsadDecile ?? "N/A"}/10) reflects the combined advantage-disadvantage profile. ` +
+        `IEO decile ${s.ieoDecile ?? "N/A"}/10 indicates ${s.ieoDecile && s.ieoDecile >= 7 ? "a well-educated workforce — supports premium service and retail product" : "a working-class education profile — price sensitivity likely"}. ` +
+        `IER decile ${s.ierDecile ?? "N/A"}/10 reflects ${s.ierDecile && s.ierDecile >= 7 ? "above-average economic resources in the household base" : "constrained household wealth — affordability is key driver"}.`,
+    },
+    {
+      heading: "Population & Demographic Trends",
+      body:
+        `${pct(d.bornOverseas)} of ${primary.suburb} residents were born overseas, ` +
+        `${d.bornOverseas && d.bornOverseas > 0.30 ? "indicating a highly diverse community with potential demand for culturally specific services and multilingual infrastructure" : "a proportion consistent with the Australian national average"}. ` +
+        `${pct(d.speaksEnglishOnly)} speak English only at home. ` +
+        `${d.indigenousPopulation && d.indigenousPopulation > 0.03 ? `The ${pct(d.indigenousPopulation)} Aboriginal and Torres Strait Islander population warrants culturally appropriate engagement strategies and heritage assessment.` : ""}`,
+    },
+    {
+      heading: "Development Recommendations",
+      body:
+        `Based on the demographic and socio-economic profile, ${primary.suburb} is best suited to ` +
+        `${s.irsdDecile && s.irsdDecile >= 8 ? "premium residential product (3–4BR family homes, boutique apartments)" : s.irsdDecile && s.irsdDecile >= 5 ? "mid-market residential product (2–3BR apartments, townhouses)" : "affordable and social housing product, likely requiring government partnership"}. ` +
+        `${h.medianRentWeekly && h.medianRentWeekly > 500 ? "Strong rental yields support build-to-rent investment." : "Moderate rental yields suggest owner-occupier focus is more appropriate."} ` +
+        `${d.totalPopulation && d.totalPopulation > 15000 ? "The large population base supports retail and community facility activation at ground level." : ""}`,
+    },
+  ];
+}
+
+/** Build risk/opportunity flags from data. */
+function buildRiskOpportunity(data: ReportData): [string, ReturnType<typeof rgb>, string][] {
+  const d = data.demographics;
+  const h = data.housing;
+  const s = data.seifa;
+  const items: [string, ReturnType<typeof rgb>, string][] = [];
+
+  if (s.irsdDecile && s.irsdDecile <= 3)
+    items.push(["RISK", DANGER, "High socio-economic disadvantage — demand for affordable product, potential grant/subsidy eligibility."]);
+  if (s.irsdDecile && s.irsdDecile >= 8)
+    items.push(["OPPORTUNITY", SUCCESS, "High-advantage area — supports premium pricing and quality finishes."]);
+  if (h.medianRentWeekly && h.medianRentWeekly > 600)
+    items.push(["OPPORTUNITY", SUCCESS, "High median rent signals rental demand — build-to-rent viable."]);
+  if (h.medianMortgageMonthly && d.medianHouseholdIncome &&
+      (h.medianMortgageMonthly / (d.medianHouseholdIncome * 4.33)) > 0.38)
+    items.push(["RISK", WARN, "Mortgage stress risk — monthly repayments exceed 38% of median income."]);
+  if (d.bornOverseas && d.bornOverseas > 0.35)
+    items.push(["OPPORTUNITY", BRAND, "High overseas-born proportion — multilingual marketing and culturally targeted product design recommended."]);
+  if (d.medianAge && d.medianAge > 50)
+    items.push(["OPPORTUNITY", rgb(0.12, 0.60, 0.55), "Ageing population — retirement living and aged-care-integrated product warranted."]);
+  if (d.medianAge && d.medianAge < 32)
+    items.push(["OPPORTUNITY", BRAND, "Young demographic — demand for smaller, entry-level and co-living product."]);
+  if (d.indigenousPopulation && d.indigenousPopulation > 0.05)
+    items.push(["RISK", WARN, "Heritage and cultural obligations apply — conduct ACHA assessment before DA lodgement."]);
+
+  return items.length > 0 ? items : [["INFO", MUTED, "No significant risks or opportunities flagged based on available ABS data."]];
+}
+
+/**
+ * GrantData needs assessment (existing stub, kept for compatibility).
  */
 export async function generateNeedsAssessment(data: ReportData[]): Promise<GeneratedReport> {
   if (data.length === 0) throw new Error("generateNeedsAssessment: data array is empty");

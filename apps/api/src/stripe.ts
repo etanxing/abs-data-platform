@@ -9,14 +9,33 @@ export function getStripe(env: Env): Stripe {
   });
 }
 
-export const REPORT_PRICE_CENTS = 9900; // $99.00 AUD
+export type ReportPlan = "single" | "professional" | "enterprise";
 
-/** Create a Stripe Checkout session for a single suburb report. */
+export const PLAN_PRICES: Record<ReportPlan, number> = {
+  single:       9900,   // $99.00 AUD
+  professional: 19900,  // $199.00 AUD
+  enterprise:   29900,  // $299.00 AUD
+};
+
+export const PLAN_NAMES: Record<ReportPlan, string> = {
+  single:       "DemoReport Single",
+  professional: "DemoReport Professional",
+  enterprise:   "DemoReport Enterprise",
+};
+
+export const PLAN_DESCRIPTIONS: Record<ReportPlan, string> = {
+  single:       "10-page demographic feasibility report — 1 suburb, ABS Census 2021",
+  professional: "10-page report + comparison with up to 2 neighbouring suburbs",
+  enterprise:   "Up to 4 suburb comparison + AI-generated executive narrative",
+};
+
+/** Create a Stripe Checkout session for a DemoReport purchase. */
 export async function createReportCheckout(
   stripe: Stripe,
   suburb: string,
   sa2Code: string,
   demoreportUrl: string,
+  plan: ReportPlan = "single",
 ): Promise<Stripe.Checkout.Session> {
   return stripe.checkout.sessions.create({
     payment_method_types: ["card"],
@@ -25,10 +44,10 @@ export async function createReportCheckout(
         price_data: {
           currency: "aud",
           product_data: {
-            name: `DemoReport: ${suburb}`,
-            description: `Demographic feasibility report for ${suburb} — ABS Census 2021`,
+            name: `${PLAN_NAMES[plan]}: ${suburb}`,
+            description: PLAN_DESCRIPTIONS[plan],
           },
-          unit_amount: REPORT_PRICE_CENTS,
+          unit_amount: PLAN_PRICES[plan],
         },
         quantity: 1,
       },
@@ -36,9 +55,9 @@ export async function createReportCheckout(
     mode: "payment",
     success_url: `${demoreportUrl}/report/success?session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${demoreportUrl}/report?suburb=${encodeURIComponent(suburb)}`,
-    metadata: { suburb, sa2Code },
+    metadata: { suburb, sa2Code, plan },
     payment_intent_data: {
-      metadata: { suburb, sa2Code },
+      metadata: { suburb, sa2Code, plan },
     },
   });
 }
