@@ -189,12 +189,14 @@ app.get("/api/report/status/:sessionId", async (c) => {
 
 app.get("/api/report/:id/download", async (c) => {
   const id = c.req.param("id");
+  const sessionId = c.req.query("session_id");
 
   const report = await c.env.DB.prepare(
-    "SELECT status, suburb, r2_key FROM reports WHERE id = ?",
-  ).bind(id).first<{ status: string; suburb: string; r2_key: string | null }>();
+    "SELECT status, suburb, r2_key, stripe_session_id FROM reports WHERE id = ?",
+  ).bind(id).first<{ status: string; suburb: string; r2_key: string | null; stripe_session_id: string }>();
 
   if (!report) return c.json({ error: "Report not found" }, 404);
+  if (!sessionId || sessionId !== report.stripe_session_id) return c.json({ error: "Unauthorized" }, 403);
   if (report.status !== "ready") return c.json({ error: "Report not ready yet", status: report.status }, 202);
   if (!report.r2_key) return c.json({ error: "Report file missing" }, 500);
 
@@ -217,12 +219,14 @@ app.get("/api/report/:id/download", async (c) => {
 
 app.get("/api/report/:id/data", async (c) => {
   const id = c.req.param("id");
+  const sessionId = c.req.query("session_id");
 
   const report = await c.env.DB.prepare(
-    "SELECT status FROM reports WHERE id = ?",
-  ).bind(id).first<{ status: string }>();
+    "SELECT status, stripe_session_id FROM reports WHERE id = ?",
+  ).bind(id).first<{ status: string; stripe_session_id: string }>();
 
   if (!report) return c.json({ error: "Report not found" }, 404);
+  if (!sessionId || sessionId !== report.stripe_session_id) return c.json({ error: "Unauthorized" }, 403);
   if (report.status !== "ready") return c.json({ error: "Report not ready yet", status: report.status }, 202);
 
   const obj = await c.env.REPORTS.get(`reports/${id}/data.json`);

@@ -94,7 +94,7 @@ function SuccessContent() {
 
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
             <Link
-              href={`/report/view?id=${status?.id}`}
+              href={`/report/view?id=${status?.id}&session_id=${encodeURIComponent(sessionId)}`}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-brand-600 text-white font-semibold rounded-xl hover:bg-brand-700 transition-colors"

@@ -988,7 +988,7 @@ export async function generateFeasibilityReport(data: ReportData): Promise<Gener
     drawText(page, "Thank you for using DemoReport · demoreport.com.au", ML + 10, y - 5, { font: bold, size: 10, color: WHITE });
   }
 
-  const pdfBytes = await doc.save();
+  const pdfBytes = await doc.save({ useObjectStreams: false });
   const buffer   = new Uint8Array(pdfBytes);
 
   const slug = data.suburb
@@ -1089,7 +1089,7 @@ export async function generateComparisonReport(
   const [compPage] = await basePdf.copyPages(compDoc, [0]);
   basePdf.addPage(compPage);
 
-  const pdfBytes = await basePdf.save();
+  const pdfBytes = await basePdf.save({ useObjectStreams: false });
   const slug = primary.suburb.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   return {
     buffer: new Uint8Array(pdfBytes),
@@ -1163,7 +1163,7 @@ export async function generateEnterpriseReport(
   const [narrativePage] = await basePdf.copyPages(narrativeDoc, [0]);
   basePdf.addPage(narrativePage);
 
-  const pdfBytes = await basePdf.save();
+  const pdfBytes = await basePdf.save({ useObjectStreams: false });
   const slug = primary.suburb.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   return {
     buffer: new Uint8Array(pdfBytes),

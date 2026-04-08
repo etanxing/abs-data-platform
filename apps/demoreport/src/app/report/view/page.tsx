@@ -130,7 +130,7 @@ const PAGE_STYLE: React.CSSProperties = {
   padding: "40px 48px",
 };
 
-function ReportContent({ data, reportId }: { data: ReportViewData; reportId: string }) {
+function ReportContent({ data, reportId, sessionId }: { data: ReportViewData; reportId: string; sessionId: string }) {
   const p = data.primary;
   const d = p.demographics;
   const h = p.housing;
@@ -229,7 +229,7 @@ function ReportContent({ data, reportId }: { data: ReportViewData; reportId: str
           </svg>
           Print / Save PDF
         </button>
-        <a className="btn btn-primary" href={`${API_URL}/api/report/${reportId}/download`} download>
+        <a className="btn btn-primary" href={`${API_URL}/api/report/${reportId}/download?session_id=${encodeURIComponent(sessionId)}`} download>
           <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
           </svg>
@@ -675,22 +675,32 @@ function ReportContent({ data, reportId }: { data: ReportViewData; reportId: str
 function ViewContent() {
   const searchParams = useSearchParams();
   const reportId = searchParams.get("id") ?? "";
+  const sessionId = searchParams.get("session_id") ?? "";
   const [data, setData] = useState<ReportViewData | null>(null);
   const [error, setError] = useState(false);
 
   useEffect(() => {
-    if (!reportId) { setError(true); return; }
-    fetchReportData(reportId).then((d) => { if (d) setData(d); else setError(true); });
-  }, [reportId]);
+    if (!reportId || !sessionId) { setError(true); return; }
+    fetchReportData(reportId, sessionId).then((d) => {
+      if (d) {
+        setData(d);
+        const suburb = d.primary?.suburb ?? "Report";
+        const state = d.primary?.state ?? "";
+        document.title = `DemoReport — ${suburb}${state ? ` ${state}` : ""} — ABS Census 2021`;
+      } else {
+        setError(true);
+      }
+    });
+  }, [reportId, sessionId]);
 
-  if (error) return <div style={{ padding: 40, textAlign: "center", color: "#6b7280" }}>Report not found or not ready yet.</div>;
+  if (error) return <div style={{ padding: 40, textAlign: "center", color: "#6b7280" }}>Report not found or access denied.</div>;
   if (!data) return (
     <div style={{ display: "flex", justifyContent: "center", padding: 60 }}>
       <div style={{ width: 32, height: 32, border: "3px solid #2563eb", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
-  return <ReportContent data={data} reportId={reportId} />;
+  return <ReportContent data={data} reportId={reportId} sessionId={sessionId} />;
 }
 
 export default function ReportViewPage() {

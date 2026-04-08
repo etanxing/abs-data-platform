@@ -60,7 +60,7 @@ export async function fetchReportStatus(sessionId: string): Promise<{
   return apiGet(`/api/report/status/${encodeURIComponent(sessionId)}`);
 }
 
-export async function fetchReportData(reportId: string): Promise<ReportViewData | null> {
-  return apiGet(`/api/report/${encodeURIComponent(reportId)}/data`);
+export async function fetchReportData(reportId: string, sessionId: string): Promise<ReportViewData | null> {
+  return apiGet(`/api/report/${encodeURIComponent(reportId)}/data?session_id=${encodeURIComponent(sessionId)}`);
 }
 
