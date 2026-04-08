@@ -111,3 +111,20 @@ CREATE TABLE IF NOT EXISTS language_diversity (
 );
 
 CREATE INDEX IF NOT EXISTS idx_lang_sa2 ON language_diversity (sa2_code);
+
+-- ─────────────────────────────────────────────
+-- Suburb/Locality (SAL) → SA2 mapping
+-- Derived from ABS SAL_2021_AUST.xlsx allocation file.
+-- Allows searching by official suburb name (e.g. "Glenside") even when
+-- the suburb name differs from the SA2 name (e.g. "Toorak Gardens").
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS suburb_sa2_mapping (
+    suburb_name  TEXT NOT NULL,
+    sa2_code     TEXT NOT NULL,
+    ratio        REAL NOT NULL DEFAULT 1.0,  -- fraction of suburb's MBs in this SA2
+    PRIMARY KEY (suburb_name, sa2_code),
+    FOREIGN KEY (sa2_code) REFERENCES sa2_areas (sa2_code)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ssm_suburb ON suburb_sa2_mapping (suburb_name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_ssm_sa2    ON suburb_sa2_mapping (sa2_code);

@@ -1,5 +1,119 @@
 import { PDFDocument, StandardFonts, rgb, type PDFPage, type PDFFont } from "pdf-lib";
+import fontkit from "@pdf-lib/fontkit";
 import type { ReportData } from "./report-types";
+
+// ─── Font loading ─────────────────────────────────────────────────────────────
+
+// Default font: Lato (TTF — WOFF2 is not reliably handled by @pdf-lib/fontkit)
+// Node.js: reads from bundled fonts/ directory (../fonts relative to dist/index.js)
+// Workers: fetches TTF from GitHub raw CDN
+const LATO_CDN = "https://raw.githubusercontent.com/google/fonts/main/ofl/lato";
+const LATO_CDN_URLS = {
+  regular: `${LATO_CDN}/Lato-Regular.ttf`,
+  bold:    `${LATO_CDN}/Lato-Bold.ttf`,
+  italic:  `${LATO_CDN}/Lato-Italic.ttf`,
+  boldObl: `${LATO_CDN}/Lato-BoldItalic.ttf`,
+};
+
+export interface FontUrls {
+  regular:  string;
+  bold:     string;
+  italic?:  string;
+  boldObl?: string;
+}
+
+/** Override font URLs for testing. Pass null to reset to default (Lato). */
+let _fontOverride: FontUrls | null = null;
+export function setFontUrls(urls: FontUrls | null) { _fontOverride = urls; _fontBufs = null; }
+
+export interface FontBuffers { regular: Uint8Array; bold: Uint8Array; italic?: Uint8Array; boldObl?: Uint8Array }
+/** Override fonts with pre-loaded TTF/OTF buffers (Node.js testing only). Pass null to reset. */
+let _fontBufs: FontBuffers | null = null;
+export function setFontBuffers(bufs: FontBuffers | null) { _fontBufs = bufs; _fontOverride = null; }
+
+export interface Fonts { regular: PDFFont; bold: PDFFont; italic: PDFFont; boldObl: PDFFont }
+
+async function fetchFontBuf(url: string): Promise<ArrayBuffer> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Font fetch failed: ${url} → ${res.status}`);
+  return res.arrayBuffer();
+}
+
+async function loadDefaultFontsNode(doc: PDFDocument): Promise<Fonts> {
+  // String variables prevent TypeScript from trying to resolve these as static modules.
+  // Workers bundler never reaches this branch at runtime.
+  const fsId  = "node:fs";
+  const urlId = "node:url";
+  const { readFileSync } = await import(fsId) as { readFileSync: (p: string) => Uint8Array };
+  const { fileURLToPath } = await import(urlId) as { fileURLToPath: (u: URL | string) => string };
+  const fontsDir = fileURLToPath(new URL("../fonts", import.meta.url));
+  const rBuf = readFileSync(`${fontsDir}/lato-regular.ttf`);
+  const bBuf = readFileSync(`${fontsDir}/lato-bold.ttf`);
+  const iBuf = readFileSync(`${fontsDir}/lato-italic.ttf`);
+  const oBuf = readFileSync(`${fontsDir}/lato-bolditalic.ttf`);
+  const r = await doc.embedFont(rBuf);
+  const b = await doc.embedFont(bBuf);
+  const i = await doc.embedFont(iBuf);
+  const o = await doc.embedFont(oBuf);
+  return { regular: r, bold: b, italic: i, boldObl: o };
+}
+
+export async function loadFonts(doc: PDFDocument): Promise<Fonts> {
+  doc.registerFontkit(fontkit);
+  try {
+    if (_fontBufs) {
+      const { regular: rBuf, bold: bBuf, italic: iBuf, boldObl: biBuf } = _fontBufs;
+      const r = await doc.embedFont(rBuf);
+      const b = await doc.embedFont(bBuf);
+      const i = iBuf  ? await doc.embedFont(iBuf)  : r;
+      const o = biBuf ? await doc.embedFont(biBuf) : b;
+      return { regular: r, bold: b, italic: i, boldObl: o };
+    }
+
+    if (_fontOverride) {
+      // Explicit URL override
+      const urls = _fontOverride;
+      const [rBuf, bBuf, iBuf, biBuf] = await Promise.all([
+        fetchFontBuf(urls.regular),
+        fetchFontBuf(urls.bold),
+        urls.italic  ? fetchFontBuf(urls.italic)  : Promise.resolve(null),
+        urls.boldObl ? fetchFontBuf(urls.boldObl) : Promise.resolve(null),
+      ]);
+      const r = await doc.embedFont(rBuf);
+      const b = await doc.embedFont(bBuf);
+      const i = iBuf  ? await doc.embedFont(iBuf)  : r;
+      const o = biBuf ? await doc.embedFont(biBuf) : b;
+      return { regular: r, bold: b, italic: i, boldObl: o };
+    }
+
+    // Default: Lato TTF
+    const isNode = typeof (globalThis as any).process !== "undefined" &&
+                   !!(globalThis as any).process.versions?.node;
+    if (isNode) {
+      return await loadDefaultFontsNode(doc);
+    }
+    // Workers: fetch from CDN
+    const [rBuf, bBuf, iBuf, biBuf] = await Promise.all([
+      fetchFontBuf(LATO_CDN_URLS.regular),
+      fetchFontBuf(LATO_CDN_URLS.bold),
+      fetchFontBuf(LATO_CDN_URLS.italic),
+      fetchFontBuf(LATO_CDN_URLS.boldObl),
+    ]);
+    const r = await doc.embedFont(rBuf);
+    const b = await doc.embedFont(bBuf);
+    const i = await doc.embedFont(iBuf);
+    const o = await doc.embedFont(biBuf);
+    return { regular: r, bold: b, italic: i, boldObl: o };
+  } catch (err) {
+    console.error("Font load failed, falling back to Helvetica:", err);
+    return {
+      regular: await doc.embedFont(StandardFonts.Helvetica),
+      bold:    await doc.embedFont(StandardFonts.HelveticaBold),
+      italic:  await doc.embedFont(StandardFonts.HelveticaOblique),
+      boldObl: await doc.embedFont(StandardFonts.HelveticaBoldOblique),
+    };
+  }
+}
 
 export type { ReportData };
 
@@ -65,16 +179,48 @@ function drawText(
   page.drawText(str, { x, y, font: opts.font, size: opts.size, color: opts.color ?? DARK, maxWidth: opts.maxWidth });
 }
 
+/** Estimate how many lines a string will wrap to at a given width.
+ *  Mirrors pdf-lib's word-wrap algorithm so y-advances stay accurate. */
+function wrappedLines(text: string, font: PDFFont, size: number, maxWidth: number): number {
+  const spaceW = font.widthOfTextAtSize(" ", size);
+  let lines = 1;
+  let lineW = 0;
+  for (const word of text.split(" ")) {
+    const wordW = font.widthOfTextAtSize(word, size);
+    // First word on a line: no leading space
+    const needed = lineW === 0 ? wordW : lineW + spaceW + wordW;
+    if (needed > maxWidth && lineW > 0) {
+      lines++;
+      lineW = wordW;
+    } else {
+      lineW = needed;
+    }
+  }
+  return lines;
+}
+
+/** Draw wrapped text and return the y consumed (baseline of last line). */
+function drawWrapped(
+  page: PDFPage, text: string, x: number, y: number,
+  opts: { font: PDFFont; size: number; color?: ReturnType<typeof rgb>; maxWidth: number; lineGap?: number }
+): number {
+  const lineH = opts.size * 1.45;
+  const gap   = opts.lineGap ?? 0;
+  const n     = wrappedLines(text, opts.font, opts.size, opts.maxWidth);
+  page.drawText(text, { x, y, font: opts.font, size: opts.size, color: opts.color ?? DARK, maxWidth: opts.maxWidth, lineHeight: lineH });
+  return y - (n - 1) * lineH - gap;
+}
+
 function hr(page: PDFPage, y: number, color = LIGHT) {
   page.drawLine({ start: { x: ML, y }, end: { x: PW - MR, y }, thickness: 0.75, color });
 }
 
 function sectionHeading(page: PDFPage, y: number, title: string, subtitle: string, bold: PDFFont, regular: PDFFont): number {
-  rect(page, ML, y, 4, 22, BRAND);
-  rect(page, ML + 4, y, CW - 4, 22, LIGHT);
-  drawText(page, title, ML + 14, y + 7, { font: bold, size: 12, color: DARK });
-  if (subtitle) drawText(page, subtitle, ML + 14 + bold.widthOfTextAtSize(title, 12) + 10, y + 8, { font: regular, size: 8.5, color: MUTED });
-  return y - 30;
+  rect(page, ML, y, 4, 28, BRAND);
+  rect(page, ML + 4, y, CW - 4, 28, LIGHT);
+  drawText(page, title, ML + 14, y + 10, { font: bold, size: 12, color: DARK });
+  if (subtitle) drawText(page, subtitle, ML + 14 + bold.widthOfTextAtSize(title, 12) + 10, y + 11, { font: regular, size: 8.5, color: MUTED });
+  return y - 36;
 }
 
 function kvRow(page: PDFPage, y: number, label: string, value: string, note: string, regular: PDFFont, bold: PDFFont, zebra = false): number {
@@ -101,7 +247,8 @@ async function newPage(
   rect(page, 0, PH - 30, PW, 30, BRAND);
   drawText(page, "DemoReport", ML, PH - 20, { font: bold, size: 10, color: WHITE });
   drawText(page, "Demographic Feasibility Report", ML + 84, PH - 20, { font: regular, size: 8.5, color: rgb(0.75, 0.88, 0.97) });
-  drawText(page, suburb, PW - MR, PH - 20, { font: bold, size: 8.5, color: WHITE, maxWidth: 180 });
+  const suburbW = Math.min(bold.widthOfTextAtSize(suburb, 8.5), 180);
+  drawText(page, suburb, PW - MR - suburbW, PH - 20, { font: bold, size: 8.5, color: WHITE, maxWidth: 180 });
 
   // Footer
   rect(page, 0, 0, PW, 22, LIGHT);
@@ -109,7 +256,7 @@ async function newPage(
   drawText(page, "DemoReport · demoreport.com.au · Data: ABS Census 2021 & SEIFA 2021 · Not financial or planning advice", ML, 7, { font: regular, size: 6.5, color: MUTED });
   pageNum(page, pageN, totalPages, regular);
 
-  return { page, y: PH - 50 };
+  return { page, y: PH - 66 };
 }
 
 // ─── Stat box ─────────────────────────────────────────────────────────────────
@@ -191,10 +338,7 @@ export async function generateFeasibilityReport(data: ReportData): Promise<Gener
   doc.setCreator("DemoReport (demoreport.com.au)");
   doc.setCreationDate(new Date());
 
-  const bold    = await doc.embedFont(StandardFonts.HelveticaBold);
-  const regular = await doc.embedFont(StandardFonts.Helvetica);
-  const italic  = await doc.embedFont(StandardFonts.HelveticaOblique);
-  const boldObl = await doc.embedFont(StandardFonts.HelveticaBoldOblique);
+  const { bold, regular, italic, boldObl } = await loadFonts(doc);
 
   const suburb = data.suburb;
   const label  = `${suburb}, ${data.state}${data.postcode ? ` ${data.postcode}` : ""}`;
@@ -219,9 +363,9 @@ export async function generateFeasibilityReport(data: ReportData): Promise<Gener
     drawText(page, "Powered by ABS Census 2021 & SEIFA 2021", ML, PH - 104, { font: italic, size: 9, color: rgb(0.65, 0.80, 0.93) });
 
     // Suburb banner inside header
-    rect(page, ML, PH - 162, CW, 44, BRAND_D);
-    drawText(page, label, ML + 12, PH - 134, { font: bold, size: 20, color: WHITE });
-    drawText(page, `SA2 Code: ${data.sa2Code}   ·   Census Year: ${data.censusYear}`, ML + 12, PH - 152, { font: regular, size: 9, color: rgb(0.75, 0.88, 0.97) });
+    rect(page, ML, PH - 172, CW, 58, BRAND_D);
+    drawText(page, label, ML + 16, PH - 138, { font: bold, size: 20, color: WHITE });
+    drawText(page, `SA2 Code: ${data.sa2Code}   ·   Census Year: ${data.censusYear}`, ML + 16, PH - 161, { font: regular, size: 9, color: rgb(0.75, 0.88, 0.97) });
 
     // 6-stat grid
     const boxW  = (CW - 8) / 3;
@@ -301,8 +445,7 @@ export async function generateFeasibilityReport(data: ReportData): Promise<Gener
       `${suburb} is ${affluence} suburb with ${pop} recorded in the 2021 ABS Census.` +
       `${age} ${d.medianAge && d.medianAge < 35 ? "indicates a younger, potentially first-home-buyer demographic." : d.medianAge && d.medianAge > 45 ? "indicates an older, established residential demographic." : "reflects a broad age mix across the community."}`;
 
-    drawText(page, summary, ML, y, { font: regular, size: 9.5, color: DARK, maxWidth: CW });
-    y -= 40;
+    y = drawWrapped(page, summary, ML, y, { font: regular, size: 9.5, color: DARK, maxWidth: CW, lineGap: 18 });
 
     // Key findings boxes
     drawText(page, "Key Findings", ML, y, { font: bold, size: 11, color: DARK });
@@ -387,7 +530,7 @@ export async function generateFeasibilityReport(data: ReportData): Promise<Gener
       `${d.medianAge && d.medianAge < 38 ? "younger, family-forming" : "more established"} demographic profile. ` +
       `${d.indigenousPopulation && d.indigenousPopulation > 0.05 ? "The above-average Indigenous population proportion should inform cultural engagement planning." : ""}` +
       `${d.bornOverseas && d.bornOverseas > 0.30 ? " High overseas-born proportion suggests strong demand for multilingual services." : ""}`;
-    drawText(page, insight, ML + 10, y - 6, { font: regular, size: 8.5, color: DARK, maxWidth: CW - 18 });
+    drawText(page, insight, ML + 14, y - 6, { font: regular, size: 8.5, color: DARK, maxWidth: CW - 22 });
     y -= 70;
   }
 
@@ -440,10 +583,10 @@ export async function generateFeasibilityReport(data: ReportData): Promise<Gener
     y -= 20;
     // Dependency ratio note
     const dependencyRatio = workingAge > 0 ? ((youth + seniors) / workingAge).toFixed(2) : "N/A";
-    rect(page, ML, y - 30, CW, 40, LIGHT2);
-    rect(page, ML, y - 30, 4, 40, ACCENT);
-    drawText(page, `Estimated Dependency Ratio: ${dependencyRatio}`, ML + 10, y + 1, { font: bold, size: 9.5, color: DARK });
-    drawText(page, "Ratio of dependants (youth + seniors) to working-age population. Lower = more economically active community.", ML + 10, y - 12, { font: regular, size: 8.5, color: MUTED, maxWidth: CW - 18 });
+    rect(page, ML, y - 36, CW, 50, LIGHT2);
+    rect(page, ML, y - 36, 4, 50, ACCENT);
+    drawText(page, `Estimated Dependency Ratio: ${dependencyRatio}`, ML + 14, y + 4, { font: bold, size: 9.5, color: DARK });
+    drawText(page, "Ratio of dependants (youth + seniors) to working-age population. Lower = more economically active community.", ML + 14, y - 12, { font: regular, size: 8.5, color: MUTED, maxWidth: CW - 22 });
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -485,8 +628,7 @@ export async function generateFeasibilityReport(data: ReportData): Promise<Gener
 
     for (const pt of incPoints) {
       rect(page, ML, y - 2, 5, 5, BRAND);
-      drawText(page, pt, ML + 12, y, { font: regular, size: 9, color: DARK, maxWidth: CW - 12 });
-      y -= 24;
+      y = drawWrapped(page, pt, ML + 12, y, { font: regular, size: 9, color: DARK, maxWidth: CW - 12, lineGap: 10 });
     }
 
     y -= 10;
@@ -564,8 +706,7 @@ export async function generateFeasibilityReport(data: ReportData): Promise<Gener
 
     for (const pt of housingPoints) {
       rect(page, ML, y - 2, 5, 5, SUCCESS);
-      drawText(page, pt, ML + 12, y, { font: regular, size: 9, color: DARK, maxWidth: CW - 12 });
-      y -= 26;
+      y = drawWrapped(page, pt, ML + 12, y, { font: regular, size: 9, color: DARK, maxWidth: CW - 12, lineGap: 10 });
     }
   }
 
@@ -578,8 +719,7 @@ export async function generateFeasibilityReport(data: ReportData): Promise<Gener
 
     y = sectionHeading(page, y, "Section 5 — SEIFA Socio-Economic Indices", "ABS SEIFA 2021 · SA2 Level", bold, regular);
 
-    drawText(page, "SEIFA (Socio-Economic Indexes for Areas) measures the relative socio-economic advantage and disadvantage of Australian communities. Scores and deciles are relative to all SA2 areas nationally.", ML, y, { font: italic, size: 8.5, color: MUTED, maxWidth: CW });
-    y -= 30;
+    y = drawWrapped(page, "SEIFA (Socio-Economic Indexes for Areas) measures the relative socio-economic advantage and disadvantage of Australian communities. Scores and deciles are relative to all SA2 areas nationally.", ML, y, { font: italic, size: 8.5, color: MUTED, maxWidth: CW, lineGap: 26 });
 
     const seifaRows: [string, string, number | null, number | null][] = [
       ["IRSD",  "Index of Relative Socio-Economic Disadvantage — measures disadvantage only. Lower score = more disadvantaged.",   s.irsd,  s.irsdDecile],
@@ -591,15 +731,24 @@ export async function generateFeasibilityReport(data: ReportData): Promise<Gener
     for (let i = 0; i < seifaRows.length; i++) {
       const [code, desc, score, decile] = seifaRows[i];
 
+      // Dynamic card height — desc text starts at y-27 and may wrap
+      const descMaxW = CW - 140;
+      const descLineH = 8 * 1.45;
+      const descN    = wrappedLines(desc, regular, 8, descMaxW);
+      // Right column (pips) reaches down to y-52. Left column bottom = y-27-(descN-1)*lineH-8 (padding).
+      const leftBottom  = 27 + (descN - 1) * descLineH + 10;
+      const cardBottom  = Math.max(leftBottom, 60); // never smaller than original
+      const cardH       = Math.round(8 + cardBottom);  // 8 = top padding above y
+
       // Card background
-      rect(page, ML, y - 60, CW, 68, i % 2 === 0 ? LIGHT2 : WHITE);
-      rect(page, ML, y - 60, 4, 68, decileColour(decile));
+      rect(page, ML, y - cardBottom, CW, cardH, i % 2 === 0 ? LIGHT2 : WHITE);
+      rect(page, ML, y - cardBottom, 4, cardH, decileColour(decile));
 
       drawText(page, code, ML + 12, y + 2, { font: bold, size: 13, color: DARK });
       drawText(page, `Score: ${fmt(score)}`, ML + 12, y - 14, { font: bold, size: 10, color: decileColour(decile) });
-      drawText(page, desc, ML + 12, y - 27, { font: regular, size: 8, color: MUTED, maxWidth: CW - 140 });
+      page.drawText(desc, { x: ML + 12, y: y - 27, font: regular, size: 8, color: MUTED, maxWidth: descMaxW, lineHeight: descLineH });
 
-      // Decile pips
+      // Decile pips (fixed offsets from card top — right column)
       const pipX = ML + CW - 128;
       drawText(page, "Decile", pipX, y + 2, { font: regular, size: 7.5, color: MUTED });
       drawText(page, decile != null ? `${decile} / 10` : "N/A", pipX, y - 12, { font: bold, size: 14, color: decileColour(decile) });
@@ -608,7 +757,7 @@ export async function generateFeasibilityReport(data: ReportData): Promise<Gener
         rect(page, pipX + (pip - 1) * 11, y - 44, 9, 8, pip <= (decile ?? 0) ? decileColour(decile) : LIGHT);
       }
 
-      y -= 74;
+      y -= cardH + 6;
     }
 
     y -= 8;
@@ -651,7 +800,7 @@ export async function generateFeasibilityReport(data: ReportData): Promise<Gener
       drawText(page, "Top Languages Spoken at Home", ML, y, { font: bold, size: 10, color: DARK });
       y -= 18;
       rect(page, ML, y - 24, CW, 32, LIGHT2);
-      drawText(page, "Language diversity breakdown (G13 — Language Spoken at Home) was not available in the short-header Census DataPack for this area. Full language data is available via ABS TableBuilder.", ML + 10, y - 14, { font: italic, size: 8.5, color: MUTED, maxWidth: CW - 18 });
+      drawText(page, "Language diversity breakdown (G13 — Language Spoken at Home) was not available in the short-header Census DataPack for this area. Full language data is available via ABS TableBuilder.", ML + 14, y - 14, { font: italic, size: 8.5, color: MUTED, maxWidth: CW - 22 });
       y -= 44;
     }
 
@@ -676,8 +825,7 @@ export async function generateFeasibilityReport(data: ReportData): Promise<Gener
 
     for (const pt of langPoints) {
       rect(page, ML, y - 2, 5, 5, rgb(0.45, 0.31, 0.78));
-      drawText(page, pt, ML + 12, y, { font: regular, size: 9, color: DARK, maxWidth: CW - 12 });
-      y -= 28;
+      y = drawWrapped(page, pt, ML + 12, y, { font: regular, size: 9, color: DARK, maxWidth: CW - 12, lineGap: 10 });
     }
   }
 
@@ -759,10 +907,10 @@ export async function generateFeasibilityReport(data: ReportData): Promise<Gener
 
     rect(page, ML, y - 34, CW, 44, LIGHT2);
     rect(page, ML, y - 34, 4, 44, decileColour(Math.round(avg)));
-    drawText(page, `Composite Score: ${avg.toFixed(1)} / 10`, ML + 10, y, { font: bold, size: 12, color: DARK });
+    drawText(page, `Composite Score: ${avg.toFixed(1)} / 10`, ML + 14, y, { font: bold, size: 12, color: DARK });
     const starStr = "*".repeat(stars) + "-".repeat(5 - stars);
-    drawText(page, starStr, ML + 10, y - 16, { font: bold, size: 16, color: ACCENT });
-    drawText(page, "Based on SEIFA indices, income, and housing affordability metrics.", ML + 10, y - 28, { font: italic, size: 8, color: MUTED, maxWidth: CW - 20 });
+    drawText(page, starStr, ML + 14, y - 16, { font: bold, size: 16, color: ACCENT });
+    drawText(page, "Based on SEIFA indices, income, and housing affordability metrics.", ML + 14, y - 28, { font: italic, size: 8, color: MUTED, maxWidth: CW - 24 });
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -801,9 +949,9 @@ export async function generateFeasibilityReport(data: ReportData): Promise<Gener
     for (const [title, source, desc] of sources) {
       rect(page, ML, y - 44, CW, 54, LIGHT2);
       rect(page, ML, y - 44, 4, 54, BRAND);
-      drawText(page, title, ML + 10, y + 2, { font: bold, size: 9.5, color: DARK, maxWidth: CW - 18 });
-      drawText(page, source, ML + 10, y - 11, { font: boldObl, size: 8, color: BRAND });
-      drawText(page, desc, ML + 10, y - 24, { font: regular, size: 8, color: MUTED, maxWidth: CW - 18 });
+      drawText(page, title, ML + 14, y + 2, { font: bold, size: 9.5, color: DARK, maxWidth: CW - 22 });
+      drawText(page, source, ML + 14, y - 11, { font: boldObl, size: 8, color: BRAND });
+      drawText(page, desc, ML + 14, y - 24, { font: regular, size: 8, color: MUTED, maxWidth: CW - 22 });
       y -= 62;
     }
 
@@ -825,8 +973,7 @@ export async function generateFeasibilityReport(data: ReportData): Promise<Gener
 
     for (const pt of methodPoints) {
       rect(page, ML + 2, y + 2, 4, 4, MUTED);
-      drawText(page, pt, ML + 12, y, { font: regular, size: 8.5, color: DARK, maxWidth: CW - 12 });
-      y -= 22;
+      y = drawWrapped(page, pt, ML + 12, y, { font: regular, size: 8.5, color: DARK, maxWidth: CW - 12, lineGap: 10 });
     }
 
     y -= 8;
@@ -835,9 +982,8 @@ export async function generateFeasibilityReport(data: ReportData): Promise<Gener
 
     drawText(page, "Disclaimer", ML, y, { font: bold, size: 9, color: MUTED });
     y -= 14;
-    drawText(page, "This report is generated automatically from publicly available ABS data. DemoReport makes no representations as to the accuracy, completeness, or suitability of this information for any particular purpose. This report does not constitute financial, investment, planning, or legal advice. Users should seek independent professional advice before making decisions based on this information. Data reflects the 2021 Census period and may not reflect current conditions.", ML, y, { font: italic, size: 7.5, color: MUTED, maxWidth: CW });
+    y = drawWrapped(page, "This report is generated automatically from publicly available ABS data. DemoReport makes no representations as to the accuracy, completeness, or suitability of this information for any particular purpose. This report does not constitute financial, investment, planning, or legal advice. Users should seek independent professional advice before making decisions based on this information. Data reflects the 2021 Census period and may not reflect current conditions.", ML, y, { font: italic, size: 7.5, color: MUTED, maxWidth: CW, lineGap: 16 });
 
-    y -= 60;
     rect(page, ML, y - 14, CW, 24, BRAND);
     drawText(page, "Thank you for using DemoReport · demoreport.com.au", ML + 10, y - 5, { font: bold, size: 10, color: WHITE });
   }
@@ -869,9 +1015,7 @@ export async function generateComparisonReport(
   // Load and append a comparison section
   const basePdf  = await PDFDocument.load(base.buffer);
   const compDoc  = await PDFDocument.create();
-  const bold     = await compDoc.embedFont(StandardFonts.HelveticaBold);
-  const regular  = await compDoc.embedFont(StandardFonts.Helvetica);
-  const italic   = await compDoc.embedFont(StandardFonts.HelveticaOblique);
+  const { bold, regular, italic } = await loadFonts(compDoc);
 
   const allSuburbs = [primary, ...neighbours.slice(0, 2)];
   const label = `${primary.suburb}, ${primary.state}`;
@@ -935,7 +1079,7 @@ export async function generateComparisonReport(
   y -= 16;
   rect(page, ML, y - 18, CW, 28, LIGHT);
   rect(page, ML, y - 18, 4, 28, BRAND);
-  drawText(page, "Primary suburb shown in bold. Neighbours sourced from adjacent SA2 codes in the same state.", ML + 10, y - 8, { font: italic, size: 8, color: MUTED, maxWidth: CW - 18 });
+  drawText(page, "Primary suburb shown in bold. Neighbours sourced from adjacent SA2 codes in the same state.", ML + 14, y - 8, { font: italic, size: 8, color: MUTED, maxWidth: CW - 22 });
 
   // Footer
   rect(page, 0, 0, PW, 22, LIGHT);
@@ -965,9 +1109,7 @@ export async function generateEnterpriseReport(
   const profReport = await generateComparisonReport(primary, neighbours.slice(0, 3));
   const basePdf    = await PDFDocument.load(profReport.buffer);
   const narrativeDoc = await PDFDocument.create();
-  const bold    = await narrativeDoc.embedFont(StandardFonts.HelveticaBold);
-  const regular = await narrativeDoc.embedFont(StandardFonts.Helvetica);
-  const italic  = await narrativeDoc.embedFont(StandardFonts.HelveticaOblique);
+  const { bold, regular, italic } = await loadFonts(narrativeDoc);
 
   const allSuburbs = [primary, ...neighbours.slice(0, 3)];
 
@@ -993,10 +1135,7 @@ export async function generateEnterpriseReport(
     rect(page, ML, y, 4, 18, BRAND);
     drawText(page, section.heading, ML + 12, y + 4, { font: bold, size: 11, color: DARK });
     y -= 28;
-    drawText(page, section.body, ML, y, { font: regular, size: 9, color: DARK, maxWidth: CW });
-    // Rough line count estimate for spacing
-    const lines = Math.ceil(section.body.length / 95);
-    y -= lines * 13 + 16;
+    y = drawWrapped(page, section.body, ML, y, { font: regular, size: 9, color: DARK, maxWidth: CW, lineGap: 16 });
     if (y < 80) break;
   }
 
@@ -1012,8 +1151,7 @@ export async function generateEnterpriseReport(
     for (const [tag, colour, text] of risks) {
       rect(page, ML, y - 2, 60, 14, colour);
       drawText(page, tag, ML + 4, y, { font: bold, size: 7.5, color: WHITE });
-      drawText(page, text, ML + 68, y, { font: regular, size: 8.5, color: DARK, maxWidth: CW - 68 });
-      y -= 20;
+      y = drawWrapped(page, text, ML + 68, y, { font: regular, size: 8.5, color: DARK, maxWidth: CW - 68, lineGap: 8 });
       if (y < 60) break;
     }
   }

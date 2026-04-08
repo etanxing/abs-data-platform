@@ -37,7 +37,7 @@ PROCESSED_DIR = Path(__file__).parent / "processed"
 PROCESSED_DIR.mkdir(exist_ok=True)
 
 STATES = {"NSW": "1", "VIC": "2", "QLD": "3", "SA": "4",
-          "WA": "5", "TAS": "6", "NT": "7", "ACT": "8"}
+          "WA": "5", "TAS": "6", "NT": "7", "ACT": "8", "Other Territories": "9"}
 STATE_BY_CODE = {v: k for k, v in STATES.items()}
 
 DISCOVER = "--discover" in sys.argv
@@ -286,6 +286,77 @@ def process_postcode_sa2() -> pd.DataFrame:
     out["postcode"] = out["postcode"].str.strip().str.zfill(4)
     out = out.dropna(subset=["postcode", "sa2_code"]).reset_index(drop=True)
     print(f"  ✓ {len(out)} postcode→SA2 mappings")
+    return out
+
+
+def process_sal_sa2() -> pd.DataFrame:
+    """
+    Derive suburb-name→SA2 correspondence by joining two ABS allocation files
+    on Mesh Block code:
+      MB_2021_AUST.xlsx   — MB → SA2
+      SAL_2021_AUST.xlsx  — MB → SAL (Suburb and Locality)
+
+    This lets users search by official suburb names (e.g. "Glenside") and find
+    the correct SA2 even when the suburb name differs from the SA2 name.
+    """
+    print("\n[SAL→SA2] Deriving suburb→SA2 mapping from SAL + MB allocation files …")
+
+    mb_path  = RAW_DIR / "MB_2021_AUST.xlsx"
+    sal_path = RAW_DIR / "SAL_2021_AUST.xlsx"
+
+    if not mb_path.exists():
+        raise FileNotFoundError(f"Missing: {mb_path}")
+    if not sal_path.exists():
+        raise FileNotFoundError(f"Missing: {sal_path}")
+
+    # Reuse MB→SA2 allocation (already loaded for postcode mapping)
+    print("  Loading MB allocation (35 MB, may take ~30s) …")
+    mb_df = pd.read_excel(mb_path, dtype=str)
+
+    mb_col_mb    = col(mb_df, "MB_CODE_2021", "MB_CODE", "MESHBLOCK_CODE")
+    sa2_code_col = col(mb_df, "SA2_CODE_2021", "SA2_MAINCODE_2021", "SA2_CODE")
+
+    if not mb_col_mb or not sa2_code_col:
+        raise ValueError(f"Cannot find MB/SA2 columns in MB allocation. Available: {list(mb_df.columns)}")
+
+    sa2_alloc = mb_df[[mb_col_mb, sa2_code_col]].copy()
+    sa2_alloc.columns = ["mb_code", "sa2_code"]
+    sa2_alloc["sa2_code"] = sa2_alloc["sa2_code"].astype(str).str.strip().str.zfill(9)
+    sa2_alloc = sa2_alloc[sa2_alloc["sa2_code"].str.match(r"^\d{9}$")]
+
+    # Load SAL allocation: MB_CODE → SAL_NAME
+    print("  Loading SAL allocation …")
+    sal_df = pd.read_excel(sal_path, dtype=str)
+    if DISCOVER:
+        print(f"  SAL alloc columns: {list(sal_df.columns)}")
+
+    mb_col_sal  = col(sal_df, "MB_CODE_2021", "MB_CODE", "MESHBLOCK_CODE")
+    sal_name_col = col(sal_df, "SAL_NAME_2021", "SAL_NAME", "SUBURB_NAME", "LOCALITY_NAME")
+
+    if not mb_col_sal or not sal_name_col:
+        raise ValueError(f"Cannot find MB/SAL columns in SAL allocation. Available: {list(sal_df.columns)}")
+
+    sal_alloc = sal_df[[mb_col_sal, sal_name_col]].copy()
+    sal_alloc.columns = ["mb_code", "suburb_name"]
+    sal_alloc = sal_alloc.dropna(subset=["suburb_name"])
+    sal_alloc = sal_alloc[sal_alloc["suburb_name"].str.strip() != ""]
+    print(f"  {len(sal_alloc)} mesh blocks with SAL name")
+
+    # Join MB → (SA2, SAL_NAME), aggregate: count MBs per (suburb_name, sa2_code) pair
+    merged = sal_alloc.merge(sa2_alloc, on="mb_code", how="inner")
+    grouped = (
+        merged.groupby(["suburb_name", "sa2_code"])
+        .size()
+        .reset_index(name="mb_count")
+    )
+
+    total_per_suburb = grouped.groupby("suburb_name")["mb_count"].transform("sum")
+    grouped["ratio"] = (grouped["mb_count"] / total_per_suburb).round(4)
+
+    out = grouped[["suburb_name", "sa2_code", "ratio"]].copy()
+    out["suburb_name"] = out["suburb_name"].str.strip()
+    out = out.dropna(subset=["suburb_name", "sa2_code"]).reset_index(drop=True)
+    print(f"  ✓ {len(out)} suburb→SA2 mappings ({out['suburb_name'].nunique()} unique suburbs)")
     return out
 
 
@@ -627,6 +698,12 @@ def main() -> None:
     pc_sa2 = pc_sa2[pc_sa2["sa2_code"].isin(valid_sa2s)]
     pc_sa2.to_csv(PROCESSED_DIR / "postcode_sa2_mapping.csv", index=False)
     print(f"[OUT] postcode_sa2_mapping.csv — {len(pc_sa2)} rows")
+
+    # ── Suburb (SAL) → SA2
+    sal_sa2 = process_sal_sa2()
+    sal_sa2 = sal_sa2[sal_sa2["sa2_code"].isin(valid_sa2s)]
+    sal_sa2.to_csv(PROCESSED_DIR / "suburb_sa2_mapping.csv", index=False)
+    print(f"[OUT] suburb_sa2_mapping.csv — {len(sal_sa2)} rows")
 
     # ── G01 (population, indigenous, born overseas)
     g01 = process_g01(states)

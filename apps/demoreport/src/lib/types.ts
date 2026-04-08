@@ -1,3 +1,14 @@
+export type ReportPlan = "single" | "professional" | "enterprise";
+
+/** JSON stored in R2 for the HTML report viewer. */
+export interface ReportViewData {
+  plan: ReportPlan;
+  suburb: string;
+  primary: SuburbResponse;
+  neighbours: SuburbResponse[];
+  generatedAt: string;
+}
+
 /** Mirrors apps/api/src/types.ts SuburbResponse — kept in sync manually. */
 export interface SuburbResponse {
   sa2Code: string;

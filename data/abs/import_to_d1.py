@@ -210,6 +210,7 @@ def import_table(csv_name: str, table: str) -> None:
 IMPORT_ORDER = [
     ("sa2_areas.csv",              "sa2_areas"),
     ("postcode_sa2_mapping.csv",   "postcode_sa2_mapping"),
+    ("suburb_sa2_mapping.csv",     "suburb_sa2_mapping"),
     ("demographics.csv",           "demographics"),
     ("seifa_scores.csv",           "seifa_scores"),
     ("housing.csv",                "housing"),

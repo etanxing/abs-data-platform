@@ -1,4 +1,4 @@
-import type { SuburbResponse } from "./types";
+import type { SuburbResponse, ReportViewData } from "./types";
 
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8787";
@@ -54,7 +54,12 @@ export async function fetchReportStatus(sessionId: string): Promise<{
   id: string;
   status: string;
   suburb: string;
+  plan: string;
   downloadUrl: string | null;
 } | null> {
   return apiGet(`/api/report/status/${encodeURIComponent(sessionId)}`);
+}
+
+export async function fetchReportData(reportId: string): Promise<ReportViewData | null> {
+  return apiGet(`/api/report/${encodeURIComponent(reportId)}/data`);
 }

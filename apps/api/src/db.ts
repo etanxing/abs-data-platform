@@ -50,7 +50,11 @@ const SUBURB_SELECT = `
 
 export const QUERY_BY_SUBURB = `
   ${SUBURB_SELECT}
-  WHERE s.sa2_name LIKE ? COLLATE NOCASE
+  WHERE s.sa2_code IN (
+    SELECT DISTINCT sa2_code FROM suburb_sa2_mapping WHERE suburb_name LIKE ? COLLATE NOCASE
+    UNION
+    SELECT sa2_code FROM sa2_areas WHERE sa2_name LIKE ? COLLATE NOCASE
+  )
   ORDER BY s.sa2_name
   LIMIT 20
 `;
@@ -147,9 +151,12 @@ export async function querySuburbs(
   const sql = byPostcode ? QUERY_BY_POSTCODE : QUERY_BY_SUBURB;
   const bindParam = byPostcode ? param : `%${param}%`;
 
+  // QUERY_BY_SUBURB has two ? placeholders (suburb_sa2_mapping + sa2_areas)
+  const bindings: string[] = byPostcode ? [bindParam] : [bindParam, bindParam];
+
   const { results } = await db
     .prepare(sql)
-    .bind(bindParam)
+    .bind(...bindings)
     .all<SuburbRow>();
 
   if (!results || results.length === 0) return [];

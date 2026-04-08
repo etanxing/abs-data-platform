@@ -75,6 +75,18 @@ DOWNLOADS = [
         "extract": False,
     },
     {
+        "key": "sal_allocation",
+        "description": "ASGS 2021 SAL allocation file (Mesh Block → Suburb/Locality, ~18 MB)",
+        "url": (
+            "https://www.abs.gov.au/statistics/standards"
+            "/australian-statistical-geography-standard-asgs-edition-3"
+            "/jul2021-jun2026/access-and-downloads/allocation-files"
+            "/SAL_2021_AUST.xlsx"
+        ),
+        "filename": "SAL_2021_AUST.xlsx",
+        "extract": False,
+    },
+    {
         "key": "census_gcp_nsw_sa2",
         "description": "Census 2021 GCP SA2 NSW short-header ZIP (~100 MB)",
         "url": (

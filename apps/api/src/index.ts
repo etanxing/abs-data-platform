@@ -30,7 +30,12 @@ export interface Env {
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 const KV_TTL = 60 * 60 * 24; // 24 hours
 
-app.use("*", cors());
+app.use("*", cors({
+  origin: ["https://demoreport.workswell.com.au", "https://grantdata.workswell.com.au", "http://localhost:3000", "http://localhost:3001"],
+  allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowHeaders: ["Content-Type", "Authorization"],
+  credentials: false,
+}));
 
 // ──────────────────────────────────────────────────────────────
 // Health
@@ -134,9 +139,9 @@ app.get("/api/report/status/:sessionId", async (c) => {
   const sessionId = c.req.param("sessionId");
 
   const report = await c.env.DB.prepare(
-    "SELECT id, status, suburb, r2_key, error_message FROM reports WHERE stripe_session_id = ?",
+    "SELECT id, status, suburb, report_type, r2_key, error_message FROM reports WHERE stripe_session_id = ?",
   ).bind(sessionId).first<{
-    id: string; status: string; suburb: string; r2_key: string | null; error_message: string | null;
+    id: string; status: string; suburb: string; report_type: string; r2_key: string | null; error_message: string | null;
   }>();
 
   if (!report) return c.json({ status: "not_found" }, 404);
@@ -145,6 +150,7 @@ app.get("/api/report/status/:sessionId", async (c) => {
     id: report.id,
     status: report.status,
     suburb: report.suburb,
+    plan: report.report_type,
     downloadUrl: report.status === "ready" ? `/api/report/${report.id}/download` : null,
     error: report.error_message ?? null,
   });
@@ -176,6 +182,27 @@ app.get("/api/report/:id/download", async (c) => {
       "Cache-Control": "private, max-age=3600",
     },
   });
+});
+
+// ──────────────────────────────────────────────────────────────
+// GET /api/report/:id/data — serve JSON report data for HTML viewer
+// ──────────────────────────────────────────────────────────────
+
+app.get("/api/report/:id/data", async (c) => {
+  const id = c.req.param("id");
+
+  const report = await c.env.DB.prepare(
+    "SELECT status FROM reports WHERE id = ?",
+  ).bind(id).first<{ status: string }>();
+
+  if (!report) return c.json({ error: "Report not found" }, 404);
+  if (report.status !== "ready") return c.json({ error: "Report not ready yet", status: report.status }, 202);
+
+  const obj = await c.env.REPORTS.get(`reports/${id}/data.json`);
+  if (!obj) return c.json({ error: "Report data not found" }, 404);
+
+  const data = await obj.json();
+  return c.json(data);
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -605,10 +632,11 @@ async function generateReportForSession(
 
     let buffer: Uint8Array;
     let filename: string;
+    let neighbours: SuburbResponse[] = [];
 
     if (plan === "professional") {
       // Fetch up to 2 neighbouring SA2s (same state, adjacent codes)
-      const neighbours = await getNeighbouringSA2s(env.DB, target.sa2Code, target.state, 2);
+      neighbours = await getNeighbouringSA2s(env.DB, target.sa2Code, target.state, 2);
       const result = await generateComparisonReport(
         suburbResponseToReportData(target),
         neighbours.map(suburbResponseToReportData),
@@ -618,7 +646,7 @@ async function generateReportForSession(
 
     } else if (plan === "enterprise") {
       // Fetch up to 3 additional SA2s for 4-way comparison
-      const neighbours = await getNeighbouringSA2s(env.DB, target.sa2Code, target.state, 3);
+      neighbours = await getNeighbouringSA2s(env.DB, target.sa2Code, target.state, 3);
       const result = await generateEnterpriseReport(
         suburbResponseToReportData(target),
         neighbours.map(suburbResponseToReportData),
@@ -636,6 +664,13 @@ async function generateReportForSession(
     const r2Key = `reports/${target.sa2Code}/${plan}/${filename}`;
     await env.REPORTS.put(r2Key, buffer, {
       httpMetadata: { contentType: "application/pdf" },
+    });
+
+    // Store structured JSON for the HTML report viewer
+    const jsonKey = `reports/${reportId}/data.json`;
+    const viewData = { plan, suburb: target.suburb, primary: target, neighbours, generatedAt: new Date().toISOString() };
+    await env.REPORTS.put(jsonKey, JSON.stringify(viewData), {
+      httpMetadata: { contentType: "application/json" },
     });
 
     await env.DB.prepare(
