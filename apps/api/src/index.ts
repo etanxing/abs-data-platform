@@ -35,6 +35,7 @@ app.use("*", cors({
   allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowHeaders: ["Content-Type", "Authorization"],
   credentials: false,
+  maxAge: 0,
 }));
 
 // ──────────────────────────────────────────────────────────────
@@ -404,7 +405,12 @@ app.post("/api/stripe/create-checkout", async (c) => {
   const body: CheckoutBody = await c.req.json<CheckoutBody>().catch(() => ({}));
   const { suburb, sa2Code, plan: planRaw } = body;
 
-  if (!suburb) return c.json({ error: "suburb is required" }, 400);
+  console.log("[checkout] input:", JSON.stringify({ suburb, sa2Code, plan: planRaw }));
+
+  if (!suburb) {
+    console.warn("[checkout] rejected: suburb missing");
+    return c.json({ error: "suburb is required" }, 400);
+  }
 
   const validPlans: ReportPlan[] = ["single", "professional", "enterprise"];
   const plan: ReportPlan = validPlans.includes(planRaw as ReportPlan)
@@ -414,11 +420,14 @@ app.post("/api/stripe/create-checkout", async (c) => {
   const stripe = getStripe(c.env);
   const demoreportUrl = c.env.DEMOREPORT_URL ?? "http://localhost:3001";
 
+  console.log("[checkout] calling Stripe:", { suburb, sa2Code, plan, demoreportUrl });
+
   try {
     const session = await createReportCheckout(stripe, suburb, sa2Code ?? "", demoreportUrl, plan);
+    console.log("[checkout] success:", { sessionId: session.id, url: session.url, plan, priceCents: PLAN_PRICES[plan] });
     return c.json({ url: session.url, sessionId: session.id, plan, priceCents: PLAN_PRICES[plan] });
   } catch (err) {
-    console.error("Stripe create-checkout error:", err);
+    console.error("[checkout] Stripe error:", err instanceof Error ? { message: err.message, stack: err.stack } : err);
     return c.json({ error: "Failed to create checkout session" }, 500);
   }
 });

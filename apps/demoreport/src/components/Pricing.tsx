@@ -62,6 +62,7 @@ function PricingInner({ suburb, sa2Code }: { suburb?: string; sa2Code?: string }
   const router = useRouter();
   const searchParams = useSearchParams();
   const [loading, setLoading] = useState<ReportPlan | null>(null);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
 
   const activeSuburb = suburb ?? searchParams.get("suburb") ?? "";
   const activeSa2    = sa2Code ?? searchParams.get("sa2Code") ?? "";
@@ -73,12 +74,13 @@ function PricingInner({ suburb, sa2Code }: { suburb?: string; sa2Code?: string }
       return;
     }
     setLoading(plan);
+    setCheckoutError(null);
     const url = await createCheckoutSession(activeSuburb, activeSa2, plan);
     if (url) {
       window.location.href = url;
     } else {
       setLoading(null);
-      alert("Could not start checkout. Please try again.");
+      setCheckoutError("Could not start checkout — please try again or contact support.");
     }
   }
 
@@ -169,6 +171,14 @@ function PricingInner({ suburb, sa2Code }: { suburb?: string; sa2Code?: string }
           ))}
         </div>
 
+        {checkoutError && (
+          <div className="flex items-center justify-center gap-2 mt-6 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700 max-w-md mx-auto">
+            <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            {checkoutError}
+          </div>
+        )}
         <p className="text-center text-xs text-gray-400 mt-8">
           Prices in AUD. Secure payment via Stripe. Instant PDF download.
         </p>

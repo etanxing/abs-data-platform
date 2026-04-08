@@ -31,7 +31,7 @@ export function Nav() {
 
           <div className="hidden md:flex items-center gap-3">
             <a
-              href="#pricing"
+              href="/#pricing"
               className="px-4 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 transition-colors"
             >
               Get a Report

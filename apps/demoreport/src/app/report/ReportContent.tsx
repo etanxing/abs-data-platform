@@ -48,6 +48,7 @@ export default function ReportContent() {
   const [error, setError] = useState<string | null>(null);
   const [checkoutLoading, setCheckoutLoading] = useState<ReportPlan | null>(null);
   const [selectedPlan, setSelectedPlan] = useState<ReportPlan>("single");
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!query) {
@@ -70,11 +71,15 @@ export default function ReportContent() {
   async function handleUnlock(plan: ReportPlan = selectedPlan) {
     if (!selected) return;
     setCheckoutLoading(plan);
+    setCheckoutError(null);
+    console.log("[checkout] starting", { suburb: selected.suburb, sa2Code: selected.sa2Code, plan });
     const url = await createCheckoutSession(selected.suburb, selected.sa2Code, plan);
+    console.log("[checkout] result", { url });
     if (url) {
       window.location.href = url;
     } else {
-      alert("Could not start checkout. Please try again.");
+      console.error("[checkout] no URL returned — showing error");
+      setCheckoutError("Could not start checkout — please try again or contact support.");
       setCheckoutLoading(null);
     }
   }
@@ -204,6 +209,7 @@ export default function ReportContent() {
             title="Housing Tenure Breakdown"
             onUnlock={handleUnlock}
             loading={checkoutLoading !== null}
+            error={checkoutError}
           >
             <HousingChart housing={d.housing} />
             <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
@@ -219,6 +225,7 @@ export default function ReportContent() {
             title="SEIFA Analysis — All 4 Indices"
             onUnlock={handleUnlock}
             loading={checkoutLoading !== null}
+            error={checkoutError}
           >
             <div className="grid grid-cols-2 gap-4">
               {[
@@ -241,6 +248,7 @@ export default function ReportContent() {
             title="Language & Cultural Diversity"
             onUnlock={handleUnlock}
             loading={checkoutLoading !== null}
+            error={checkoutError}
           >
             <div className="space-y-2">
               {d.demographics.topLanguages.slice(0, 5).map((l) => (
@@ -287,6 +295,14 @@ export default function ReportContent() {
               ))}
             </div>
 
+            {checkoutError && (
+              <div className="flex items-center gap-2 bg-red-500/20 border border-red-400/40 rounded-lg px-4 py-2.5 mb-3 text-sm text-red-100">
+                <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                {checkoutError}
+              </div>
+            )}
             <button
               onClick={() => handleUnlock(selectedPlan)}
               disabled={checkoutLoading !== null}
