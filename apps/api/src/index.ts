@@ -30,6 +30,22 @@ export interface Env {
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 const KV_TTL = 60 * 60 * 24; // 24 hours
 
+/** Simple KV-backed rate limiter. Returns true if the request should be blocked. */
+async function isRateLimited(
+  kv: KVNamespace,
+  ip: string,
+  key: string,
+  limit: number,
+  windowSecs: number,
+): Promise<boolean> {
+  const bucket = Math.floor(Date.now() / 1000 / windowSecs);
+  const kvKey = `rl:${key}:${ip}:${bucket}`;
+  const current = parseInt((await kv.get(kvKey)) ?? "0", 10);
+  if (current >= limit) return true;
+  await kv.put(kvKey, String(current + 1), { expirationTtl: windowSecs * 2 });
+  return false;
+}
+
 app.use("*", cors({
   origin: ["https://demoreport.workswell.com.au", "https://grantdata.workswell.com.au", "http://localhost:3000", "http://localhost:3001"],
   allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -51,6 +67,11 @@ app.get("/api/health", (c) => {
 // ──────────────────────────────────────────────────────────────
 
 app.get("/api/data/suburb/:name", async (c) => {
+  const ip = c.req.header("cf-connecting-ip") ?? "unknown";
+  if (await isRateLimited(c.env.CACHE, ip, "data", 60, 60)) {
+    return c.json({ error: "Too many requests — please slow down." }, 429);
+  }
+
   const name = c.req.param("name").trim();
   if (!name) return c.json({ error: "Suburb name is required" }, 400);
 
@@ -79,6 +100,11 @@ app.get("/api/data/suburb/:name", async (c) => {
 // ──────────────────────────────────────────────────────────────
 
 app.get("/api/data/postcode/:code", async (c) => {
+  const ip = c.req.header("cf-connecting-ip") ?? "unknown";
+  if (await isRateLimited(c.env.CACHE, ip, "data", 60, 60)) {
+    return c.json({ error: "Too many requests — please slow down." }, 429);
+  }
+
   const code = c.req.param("code").trim();
   if (!/^\d{4}$/.test(code)) {
     return c.json({ error: "Postcode must be a 4-digit number" }, 400);
@@ -401,6 +427,11 @@ app.get("/api/subscription/status", requireAuth, async (c) => {
 // ──────────────────────────────────────────────────────────────
 
 app.post("/api/stripe/create-checkout", async (c) => {
+  const ip = c.req.header("cf-connecting-ip") ?? "unknown";
+  if (await isRateLimited(c.env.CACHE, ip, "checkout", 5, 60)) {
+    return c.json({ error: "Too many requests — please try again in a minute." }, 429);
+  }
+
   interface CheckoutBody { suburb?: string; sa2Code?: string; plan?: string }
   const body: CheckoutBody = await c.req.json<CheckoutBody>().catch(() => ({}));
   const { suburb, sa2Code, plan: planRaw } = body;

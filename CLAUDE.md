@@ -118,15 +118,20 @@ pnpm exec wrangler deploy
 
 ## Deployment Workflow
 
+**Rule: always commit before deploying.**
+
 ```bash
 # 1. Make changes
 # 2. Test locally
 cd apps/api && pnpm dev
 
-# 3. Deploy Worker
+# 3. Commit first
+git add <files> && git commit -m "..."
+
+# 4. Deploy Worker
 cd apps/api && pnpm exec wrangler deploy
 
-# 4. Build + deploy frontends
+# 5. Build + deploy frontends
 cd apps/demoreport
 NEXT_PUBLIC_API_URL=https://api.workswell.com.au pnpm run build
 pnpm exec wrangler pages deploy out --project-name demoreport

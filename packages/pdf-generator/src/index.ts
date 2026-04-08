@@ -4,15 +4,15 @@ import type { ReportData } from "./report-types";
 
 // ─── Font loading ─────────────────────────────────────────────────────────────
 
-// Default font: Lato (TTF — WOFF2 is not reliably handled by @pdf-lib/fontkit)
+// Default font: DM Sans (TTF — WOFF2 is not reliably handled by @pdf-lib/fontkit)
 // Node.js: reads from bundled fonts/ directory (../fonts relative to dist/index.js)
 // Workers: fetches TTF from GitHub raw CDN
-const LATO_CDN = "https://raw.githubusercontent.com/google/fonts/main/ofl/lato";
-const LATO_CDN_URLS = {
-  regular: `${LATO_CDN}/Lato-Regular.ttf`,
-  bold:    `${LATO_CDN}/Lato-Bold.ttf`,
-  italic:  `${LATO_CDN}/Lato-Italic.ttf`,
-  boldObl: `${LATO_CDN}/Lato-BoldItalic.ttf`,
+const DM_SANS_CDN = "https://raw.githubusercontent.com/googlefonts/dm-fonts/main/Sans/fonts/ttf";
+const DM_SANS_CDN_URLS = {
+  regular: `${DM_SANS_CDN}/DMSans-Regular.ttf`,
+  bold:    `${DM_SANS_CDN}/DMSans-Bold.ttf`,
+  italic:  `${DM_SANS_CDN}/DMSans-Italic.ttf`,
+  boldObl: `${DM_SANS_CDN}/DMSans-BoldItalic.ttf`,
 };
 
 export interface FontUrls {
@@ -47,10 +47,10 @@ async function loadDefaultFontsNode(doc: PDFDocument): Promise<Fonts> {
   const { readFileSync } = await import(fsId) as { readFileSync: (p: string) => Uint8Array };
   const { fileURLToPath } = await import(urlId) as { fileURLToPath: (u: URL | string) => string };
   const fontsDir = fileURLToPath(new URL("../fonts", import.meta.url));
-  const rBuf = readFileSync(`${fontsDir}/lato-regular.ttf`);
-  const bBuf = readFileSync(`${fontsDir}/lato-bold.ttf`);
-  const iBuf = readFileSync(`${fontsDir}/lato-italic.ttf`);
-  const oBuf = readFileSync(`${fontsDir}/lato-bolditalic.ttf`);
+  const rBuf = readFileSync(`${fontsDir}/dm-sans-regular.ttf`);
+  const bBuf = readFileSync(`${fontsDir}/dm-sans-bold.ttf`);
+  const iBuf = readFileSync(`${fontsDir}/dm-sans-italic.ttf`);
+  const oBuf = readFileSync(`${fontsDir}/dm-sans-bolditalic.ttf`);
   const r = await doc.embedFont(rBuf);
   const b = await doc.embedFont(bBuf);
   const i = await doc.embedFont(iBuf);
@@ -94,10 +94,10 @@ export async function loadFonts(doc: PDFDocument): Promise<Fonts> {
     }
     // Workers: fetch from CDN
     const [rBuf, bBuf, iBuf, biBuf] = await Promise.all([
-      fetchFontBuf(LATO_CDN_URLS.regular),
-      fetchFontBuf(LATO_CDN_URLS.bold),
-      fetchFontBuf(LATO_CDN_URLS.italic),
-      fetchFontBuf(LATO_CDN_URLS.boldObl),
+      fetchFontBuf(DM_SANS_CDN_URLS.regular),
+      fetchFontBuf(DM_SANS_CDN_URLS.bold),
+      fetchFontBuf(DM_SANS_CDN_URLS.italic),
+      fetchFontBuf(DM_SANS_CDN_URLS.boldObl),
     ]);
     const r = await doc.embedFont(rBuf);
     const b = await doc.embedFont(bBuf);

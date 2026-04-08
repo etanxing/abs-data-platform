@@ -63,3 +63,4 @@ export async function fetchReportStatus(sessionId: string): Promise<{
 export async function fetchReportData(reportId: string): Promise<ReportViewData | null> {
   return apiGet(`/api/report/${encodeURIComponent(reportId)}/data`);
 }
+
